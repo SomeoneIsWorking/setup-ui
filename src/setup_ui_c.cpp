@@ -12,6 +12,24 @@
 // paths handed to the validator remain valid only during that call.
 namespace {
 
+// The C ABI owns its own kind values: they are a stable contract and must not
+// track the order of the C++ enum.
+int c_event_kind(setup_ui::EventKind kind) {
+  switch (kind) {
+  case setup_ui::EventKind::Started:
+    return SETUP_UI_EVENT_STARTED;
+  case setup_ui::EventKind::Uploaded:
+    return SETUP_UI_EVENT_UPLOADED;
+  case setup_ui::EventKind::BatchComplete:
+    return SETUP_UI_EVENT_BATCH_COMPLETE;
+  case setup_ui::EventKind::Validated:
+    return SETUP_UI_EVENT_VALIDATED;
+  case setup_ui::EventKind::Failed:
+    return SETUP_UI_EVENT_FAILED;
+  }
+  return SETUP_UI_EVENT_FAILED;
+}
+
 struct CState {
   setup_ui_validate_fn fn = nullptr;
   void *userdata = nullptr;
@@ -22,13 +40,20 @@ std::string validate_c(const std::vector<setup_ui::UploadedFile> &files, void *r
   if (!state || !state->fn) {
     return "setup UI is misconfigured: no validator";
   }
+  // The C arrays point at storage that must outlive the callback: keep the
+  // path strings in a local vector rather than pointing at temporaries.
+  std::vector<std::string> path_storage;
   std::vector<const char *> paths;
   std::vector<const char *> names;
+  path_storage.reserve(files.size());
   paths.reserve(files.size());
   names.reserve(files.size());
   for (const auto &file : files) {
-    paths.push_back(file.path.string().c_str());
-    names.push_back(file.spec.name.c_str());
+    path_storage.push_back(file.path.string());
+  }
+  for (std::size_t index = 0; index < files.size(); ++index) {
+    paths.push_back(path_storage[index].c_str());
+    names.push_back(files[index].spec.name.c_str());
   }
   char error[256] = {0};
   if (state->fn(state->userdata, paths.data(), names.data(), files.size(), error, sizeof error) ==
@@ -138,7 +163,7 @@ size_t setup_ui_server_poll(setup_ui_server *server, setup_ui_event *events, siz
   for (size_t index = 0; index < count; ++index) {
     const setup_ui::Event &source = delivered[index];
     events[index] = setup_ui_event{server->messages[index].c_str(), source.uploaded_size,
-                                   static_cast<int>(source.kind), source.port};
+                                   c_event_kind(source.kind), source.port};
   }
   return count;
 }
