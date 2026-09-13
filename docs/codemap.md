@@ -1,14 +1,14 @@
 # Codemap
 
-setup-ui is one cohesive subsystem: a browser-based first-run setup host for
-native game ports. Ownership is single-level; consumers supply everything
-title-specific.
+setup-ui is one cohesive subsystem: an in-app first-run setup screen for
+native game ports, rendered with RmlUi inside the consumer's own SDL3 window.
+Ownership is single-level; consumers supply everything title-specific.
 
 | Responsibility | Where | Notes |
 |---|---|---|
-| C++ server (lifecycle, routes, staging, validation dispatch) | `include/setup_ui/setup_ui.h`, `src/setup_ui.cpp` | Owns the Lucent HTTP listener, upload framing, staging directories, poll()-thread validation, event queue. Never judges file content. |
-| C ABI wrapper | `include/setup_ui/setup_ui_c.h`, `src/setup_ui_c.cpp` | Mirrors the C++ owner for C consumers; event strings stay valid until the next poll. |
-| Embedded web assets (page + controller) | `assets/index.html`, `assets/setup.js`, `tools/embed_assets.py` | Responsive dark UI; config wording comes from /api/config. Generated C++ pair compiled into the library. |
-| Lucent HTTP transport | external `lucent::http::Server` | Loopback default; LocalNetwork requires the pairing token in every route. |
-| Tests (shipping server over loopback) | `tests/test_setup_ui.cpp` | C++ and C-ABI flows: routes, staging bytes, validation threading, rejection wording, stop lifecycle. |
-| Verifier | `tools/verify.py` | Ruff format/check, CMake build, clang-tidy on the compile database, CTest. |
+| Required-file, staged-state, and validation policy | `include/setup_ui/setup_ui.h`, `src/session.cpp` | Owns `Config`/`FileSpec`/`Entry`, staging-directory lifetime, partial-set wording, archive replacement, and the call into the consumer's `Validator`. Never judges file content. |
+| Screen presentation and player requests | `src/view.cpp` | Owns the SDL3 window, RmlUi context, embedded document, display-scale mapping, pointer/key input, and the `Browse`/`Start`/`Cancel` event queue. |
+| RmlUi render backend over SDL3 | `src/rml_sdl_renderer.{h,cpp}` | `SDL_RenderGeometry`-based draw with integer handle tables. SDL3 has no upstream RmlUi renderer interface. |
+| Markup, styling, and embedding | `assets/setup.rml`, `assets/setup.rcss`, `tools/embed_assets.py` | Layout, dark theme, narrow-viewport block; embedded into the library at build time. |
+| Tests (shipping screen and session) | `tests/test_setup_ui.cpp` | Staging/validation, archive replacement, partial-selection wording, stale-staging pruning, geometry capture, phone-viewport density. |
+| Verification helpers | `tools/frame_png.py`, `tools/verify.py` | Offscreen capture to PNG; ruff, CMake, clang-tidy, CTest. |

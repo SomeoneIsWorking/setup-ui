@@ -1,0 +1,333 @@
+/* setup.rcss — the shared in-app setup screen styling.
+ *
+ * Flat, high-contrast dark theme that suits a phone in landscape and a
+ * desktop window alike. Sizes are in dp (density-independent pixels) and the
+ * view feeds the host's display scale to the context, so the screen keeps its
+ * physical size on a phone and on a desktop. Layout is percentage-based with
+ * media queries for short or narrow viewports instead of fixed pixel columns.
+ *
+ * Rounded corners and shadows are avoided deliberately: the screen must
+ * render through simple geometry so every host backend (SDL_Renderer today)
+ * can draw it.
+ *
+ * RmlUi has no built-in user-agent stylesheet, so the element defaults this
+ * screen depends on are stated here explicitly rather than assumed. */
+div, p, h1 {
+	display: block;
+}
+
+body {
+	font-family: setup;
+	font-size: 19dp;
+	color: #e8ecf4;
+	background-color: #0b0e14;
+	width: 100%;
+	height: 100%;
+}
+
+#screen {
+	display: block;
+	height: 100%;
+	padding: 3% 4%;
+}
+
+/* Percentages for padding resolve against the containing block, which keeps
+   the card inset proportional on a wide desktop window and a phone alike. */
+
+#title {
+	display: block;
+	font-size: 32dp;
+	color: #ffffff;
+}
+
+#message {
+	display: block;
+	color: #8b93a7;
+	margin-top: 6dp;
+}
+
+#panel {
+	display: block;
+	background-color: #141926;
+	border: 1dp #232b3e;
+	padding: 3% 4%;
+	margin-top: 18dp;
+}
+
+#rows {
+	display: flex;
+	flex-direction: column;
+}
+
+.row {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	width: 100%;
+	min-height: 44dp;
+	padding-top: 6dp;
+	padding-bottom: 6dp;
+}
+
+.row .mark {
+	display: block;
+	width: 30dp;
+	height: 30dp;
+	margin-right: 16dp;
+	background-color: #1b2233;
+	border: 2dp #3a4560;
+	text-align: center;
+	font-size: 20dp;
+	color: #8b93a7;
+}
+
+.row.provided .mark {
+	background-color: #4fc98a;
+	border: 2dp #4fc98a;
+	color: #0b0e14;
+}
+
+.row .label {
+	display: block;
+	color: #8b93a7;
+	font-size: 20dp;
+}
+
+.row.provided .label {
+	color: #e8ecf4;
+}
+
+#chooser {
+	display: block;
+	max-width: 420dp;
+	margin-top: 20dp;
+}
+
+#browse {
+	display: block;
+	background-color: #1d2740;
+	border: 1dp #2f3d5c;
+	color: #e8ecf4;
+	font-size: 20dp;
+	padding: 16dp;
+	text-align: center;
+}
+
+#browse:hover {
+	background-color: #253252;
+}
+
+#hint {
+	display: block;
+	color: #8b93a7;
+	font-size: 16dp;
+	margin-top: 10dp;
+}
+
+#progress {
+	display: block;
+	height: 10dp;
+	background-color: #232b3e;
+	margin-top: 18dp;
+	visibility: hidden;
+}
+
+#progress-fill {
+	display: block;
+	width: 0%;
+	height: 10dp;
+	background-color: #5aa2ff;
+}
+
+#status {
+	display: block;
+	margin-top: 16dp;
+	color: #8b93a7;
+	min-height: 26dp;
+	font-size: 18dp;
+}
+
+#status.rejected {
+	color: #ff6b6b;
+}
+
+#status.accepted {
+	color: #4fc98a;
+}
+
+#actions {
+	display: block;
+	max-width: 420dp;
+	margin-top: 6dp;
+}
+
+#start {
+	display: block;
+	background-color: #5aa2ff;
+	border: 1dp #5aa2ff;
+	color: #0b0e14;
+	font-size: 20dp;
+	padding: 16dp;
+	text-align: center;
+}
+
+#start:hover {
+	background-color: #6fb0ff;
+}
+
+#start.disabled {
+	background-color: #2a3348;
+	border: 1dp #2a3348;
+	color: #66708a;
+}
+
+#again {
+	display: block;
+	margin-top: 12dp;
+	background-color: #141926;
+	border: 1dp #2f3d5c;
+	color: #8b93a7;
+	font-size: 18dp;
+	padding: 13dp;
+	text-align: center;
+}
+
+#footer {
+	display: block;
+	margin-top: 18dp;
+	color: #66708a;
+	font-size: 16dp;
+}
+
+/* Short viewports (a phone in landscape is roughly 400-460 dp tall): tighten
+   the vertical rhythm and type scale so the whole screen fits without
+   scrolling. */
+@media (max-height: 560dp) {
+	#screen {
+		padding: 2% 3%;
+	}
+
+	#title {
+		font-size: 24dp;
+	}
+
+	#message {
+		font-size: 17dp;
+		margin-top: 2dp;
+	}
+
+	#panel {
+		margin-top: 10dp;
+		padding: 2% 3%;
+	}
+
+	.row {
+		min-height: 30dp;
+		padding-top: 1dp;
+		padding-bottom: 1dp;
+	}
+
+	.row .mark {
+		width: 22dp;
+		height: 22dp;
+		font-size: 15dp;
+		margin-right: 12dp;
+	}
+
+	.row .label {
+		font-size: 17dp;
+	}
+
+	#chooser {
+		width: 300dp;
+		margin-top: 10dp;
+	}
+
+	#browse {
+		font-size: 18dp;
+		padding: 11dp;
+	}
+
+	#hint {
+		font-size: 15dp;
+		margin-top: 6dp;
+	}
+
+	#status {
+		min-height: 20dp;
+		font-size: 16dp;
+		margin-top: 10dp;
+	}
+
+	#actions {
+		width: 300dp;
+		margin-top: 4dp;
+	}
+
+	#start {
+		font-size: 18dp;
+		padding: 11dp;
+	}
+
+	#again {
+		font-size: 16dp;
+		padding: 9dp;
+		margin-top: 8dp;
+	}
+
+	#footer {
+		margin-top: 8dp;
+		font-size: 14dp;
+	}
+}
+
+/* Narrow viewports (a phone held upright, or the emulator's default portrait):
+   the rows and controls take the full width and the type scale drops a step so
+   nothing is clipped or needs horizontal scrolling. */
+@media (max-width: 640dp) {
+	#screen {
+		padding: 3% 3%;
+	}
+
+	#title {
+		font-size: 22dp;
+	}
+
+	#message {
+		font-size: 15dp;
+	}
+
+	.row {
+		min-height: 34dp;
+		padding-top: 3dp;
+		padding-bottom: 3dp;
+	}
+
+	.row .mark {
+		width: 22dp;
+		height: 22dp;
+		font-size: 15dp;
+		margin-right: 12dp;
+	}
+
+	.row .label {
+		font-size: 15dp;
+	}
+
+	#chooser,
+	#actions {
+		max-width: none;
+	}
+
+	#browse,
+	#start,
+	#again {
+		font-size: 16dp;
+		padding: 12dp;
+	}
+
+	#hint,
+	#footer {
+		font-size: 13dp;
+	}
+}

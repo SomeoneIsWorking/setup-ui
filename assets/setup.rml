@@ -1,0 +1,29 @@
+<!-- setup.rml — the shared in-app setup screen structure.
+
+     Rendered by RmlUi inside the game's own window. Titles supply the wording
+     and the required-file rows at runtime; nothing title-specific lives here. -->
+<rml>
+<head>
+	<link type="text/rcss" href="setup.rcss"/>
+</head>
+<body>
+	<div id="screen">
+		<h1 id="title">Setup</h1>
+		<p id="message">Choose your files to continue.</p>
+		<div id="panel">
+			<div id="rows"></div>
+			<div id="chooser">
+				<button id="browse">Choose files</button>
+				<p id="hint">or one archive</p>
+			</div>
+			<div id="progress"><div id="progress-fill"></div></div>
+			<p id="status"></p>
+			<div id="actions">
+				<button id="start">Start</button>
+				<button id="again">Choose different files</button>
+			</div>
+		</div>
+		<p id="footer"></p>
+	</div>
+</body>
+</rml>

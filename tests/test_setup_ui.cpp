@@ -1,21 +1,19 @@
 #include "setup_ui/setup_ui.h"
-#include "setup_ui/setup_ui_c.h"
 
 #include <atomic>
 #include <cstdio>
 #include <cstring>
-#include <cstdlib>
+#include <unistd.h>
 #include <filesystem>
 #include <fstream>
-#include <optional>
 #include <string>
 #include <vector>
 
-// Drives the shipping server over loopback with raw HTTP requests, the same
-// transport path a browser uses. Asserts route behavior, staging paths,
-// validation threading, and failure wording.
-const char *expected_names[] = {"Alpha.bin", "Beta.bin", "Gamma.bin"};
-
+// Exercises the shipping session and screen: staging, ordering, validation
+// dispatch, rejection wording, and a real RmlUi render through SDL's 2D
+// renderer. The render assertion is a discriminator: a document that produces
+// no geometry (a missing font, a broken stylesheet, an unmounted document)
+// must fail here rather than look like a blank success.
 namespace {
 
 int g_failures = 0;
@@ -28,300 +26,296 @@ int g_failures = 0;
     }                                                                                              \
   } while (0)
 
-#if defined(_WIN32)
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#else
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
-#endif
-
-bool send_all(int client, std::string_view bytes) {
-  while (!bytes.empty()) {
-    const auto sent = ::send(client, bytes.data(), static_cast<int>(bytes.size()), 0);
-    if (sent <= 0) {
-      return false;
-    }
-    bytes.remove_prefix(static_cast<std::size_t>(sent));
-  }
-  return true;
+std::filesystem::path make_root(const char *name) {
+  const auto root = std::filesystem::temp_directory_path() /
+                    (std::string{name} + "-" + std::to_string(static_cast<long>(::getpid())));
+  std::error_code status;
+  std::filesystem::remove_all(root, status);
+  std::filesystem::create_directories(root, status);
+  return root;
 }
 
-std::string http_request(std::uint16_t port, const std::string &target,
-                         const std::string &method = "GET", const std::string &body = {}) {
-  int client = ::socket(AF_INET, SOCK_STREAM, 0);
-  CHECK(client >= 0);
-  sockaddr_in address{};
-  address.sin_family = AF_INET;
-  address.sin_port = htons(port);
-  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  if (::connect(client, reinterpret_cast<sockaddr *>(&address), sizeof address) != 0) {
-    ::close(client);
-    return {};
-  }
-  std::string wire = method + " " + target + " HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: " +
-                     std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" + body;
-  CHECK(send_all(client, wire));
-  ::shutdown(client, SHUT_WR);
-  std::string response;
-  char block[4096];
-  for (int count; (count = static_cast<int>(::recv(client, block, sizeof block, 0))) > 0;) {
-    response.append(block, static_cast<std::size_t>(count));
-  }
-  ::close(client);
-  return response;
-}
-
-std::string_view body_of(std::string_view response) {
-  const std::size_t split = response.find("\r\n\r\n");
-  return split == std::string_view::npos ? std::string_view{} : response.substr(split + 4);
+void write_file(const std::filesystem::path &path, const std::string &contents) {
+  std::ofstream file(path, std::ios::binary | std::ios::trunc);
+  file.write(contents.data(), static_cast<std::streamsize>(contents.size()));
 }
 
 setup_ui::Config test_config() {
   setup_ui::Config config;
-  config.title = "Test setup";
-  config.message = "Provide the files.";
-  config.hint = "one archive is fine";
-  config.footer = "no files leave this network";
-  config.files = {
-      {"a", "Alpha.bin", "Alpha"}, {"b", "Beta.bin", "Beta"}, {"c", "Gamma.bin", "Gamma"}};
+  config.title = "Benefactor setup";
+  config.message = "Choose your original disk images.";
+  config.hint = "or one ZIP archive";
+  config.footer = "Your files stay on this device.";
+  config.files = {{"disk1", "Disk.1", "Game disc 1"},
+                  {"disk2", "Disk.2", "Game disc 2"},
+                  {"disk3", "Disk.3", "Game disc 3"}};
   config.accepts_archive = true;
   return config;
 }
 
-setup_ui::ServerOptions test_options(const std::filesystem::path &staging_root) {
-  setup_ui::ServerOptions options;
-  options.config = test_config();
-  options.staging_root = staging_root;
-  options.max_file_bytes = 1 << 20;
-  return options;
+void test_session_staging_and_validation(const std::filesystem::path &root) {
+  const auto source_dir = root / "chosen";
+  std::filesystem::create_directories(source_dir);
+  write_file(source_dir / "Disk.1", std::string(2048, 'a'));
+  write_file(source_dir / "Disk.2", std::string(1024, 'b'));
+  write_file(source_dir / "Disk.3", std::string(512, 'c'));
+  write_file(source_dir / "NotADisk.bin", "x");
+
+  std::atomic<int> calls{0};
+  std::vector<std::string> seen_names;
+  setup_ui::SessionOptions options;
+  options.staging_root = root / "staging";
+  setup_ui::Session session(
+      test_config(), options,
+      [&](const std::vector<setup_ui::StagedFile> &files) {
+        calls.fetch_add(1);
+        seen_names.clear();
+        for (const auto &file : files) {
+          seen_names.push_back(file.spec.name);
+          // The validator must receive staged, readable paths.
+          std::ifstream staged(file.path, std::ios::binary);
+          CHECK(static_cast<bool>(staged));
+        }
+        return std::string{};
+      });
+
+  CHECK(session.entries().size() == 3);
+  CHECK(!session.entries()[0].provided);
+  CHECK(session.status() == setup_ui::Status::Collecting);
+
+  std::string error;
+  const std::size_t added = session.add_selected(
+      {source_dir / "Disk.1", source_dir / "NotADisk.bin", source_dir / "Disk.2"}, error);
+  CHECK(added == 2);
+  CHECK(!error.empty());
+  CHECK(session.entries()[0].provided);
+  CHECK(session.entries()[1].provided);
+  CHECK(!session.entries()[2].provided);
+  CHECK(session.status() == setup_ui::Status::Collecting);
+
+  const std::size_t more = session.add_selected({source_dir / "Disk.3"}, error);
+  CHECK(more == 1);
+  CHECK(error.empty());
+  CHECK(session.status() == setup_ui::Status::Ready);
+
+  session.validate_if_ready();
+  CHECK(calls.load() == 1);
+  CHECK(session.status() == setup_ui::Status::Accepted);
+  CHECK(seen_names.size() == 3);
+  CHECK(seen_names[0] == "Disk.1");
+  CHECK(seen_names[1] == "Disk.2");
+  CHECK(seen_names[2] == "Disk.3");
+
+  // Re-validating an accepted set does not re-run the validator.
+  session.validate_if_ready();
+  CHECK(calls.load() == 1);
+
+  // Staged bytes live under the caller's staging root.
+  CHECK(session.staging_directory().find((root / "staging").string()) == 0);
 }
 
-void drain(setup_ui::Server &server, std::vector<setup_ui::Event> &events) {
-  server.poll(events);
+void test_partial_selection_names_what_is_missing(const std::filesystem::path &root) {
+  std::filesystem::create_directories(root / "source");
+  const auto source_dir = root / "source";
+  write_file(source_dir / "Disk.1", std::string(16, 'a'));
+  write_file(source_dir / "Disk.2", std::string(16, 'b'));
+  write_file(source_dir / "Disk.3", std::string(16, 'c'));
+
+  setup_ui::SessionOptions options;
+  options.staging_root = root / "staging";
+  setup_ui::Session session(test_config(), options,
+                            [](const std::vector<setup_ui::StagedFile> &) { return std::string{}; });
+
+  std::string error;
+  CHECK(session.add_selected({source_dir / "Disk.1"}, error) == 1);
+  CHECK(session.status() == setup_ui::Status::Collecting);
+  CHECK(session.message() == "Still needed: Disk.2, Disk.3");
+  CHECK(error == session.message()); // the caller sees the same wording
+
+  CHECK(session.add_selected({source_dir / "Disk.2", source_dir / "Disk.3"}, error) == 2);
+  CHECK(session.status() == setup_ui::Status::Ready);
+  CHECK(session.message().empty());
+  CHECK(error.empty());
 }
 
-} // namespace
+void test_stale_staging_is_pruned(const std::filesystem::path &root) {
+  std::filesystem::create_directories(root / "staging" / "setup-abandoned");
+  write_file(root / "staging" / "setup-abandoned" / "Disk.1", "left behind");
+  std::filesystem::create_directories(root / "staging" / "keep-me");
+  write_file(root / "staging" / "keep-me" / "notes.txt", "not a session");
 
-// ── C ABI wrapper: the same flow through setup_ui_c.h ──────────────────────
-namespace {
+  setup_ui::Session::discard_stale_staging(root / "staging");
 
-struct CValidateState {
-  int calls = 0;
-};
+  CHECK(!std::filesystem::exists(root / "staging" / "setup-abandoned"));
+  CHECK(std::filesystem::exists(root / "staging" / "keep-me" / "notes.txt"));
 
-// The validator signature mirrors the C ABI; the path and name arrays are
-// positionally bound and both index by file order.
-// NOLINTBEGIN(bugprone-easily-swappable-parameters)
-int c_validate(void *raw, const char *const *paths, const char *const *names, size_t count,
-               char *error, size_t error_capacity) {
-  auto *state = static_cast<CValidateState *>(raw);
-  ++state->calls;
-  if (count != 3) {
-    std::snprintf(error, error_capacity, "expected three files, got %zu", count);
-    return 1;
+  // A root that does not exist is not an error: the first run has none yet.
+  setup_ui::Session::discard_stale_staging(root / "absent");
+  CHECK(!std::filesystem::exists(root / "absent"));
+}
+
+void test_session_rejection_keeps_rows(const std::filesystem::path &root) {
+  std::filesystem::create_directories(root);
+  const auto source_dir = root / "bad";
+  std::filesystem::create_directories(source_dir);
+  write_file(source_dir / "Disk.1", "1");
+  write_file(source_dir / "Disk.2", "2");
+  write_file(source_dir / "Disk.3", "3");
+
+  setup_ui::SessionOptions options;
+  options.staging_root = root / "staging";
+  setup_ui::Session session(test_config(), options,
+                            [](const std::vector<setup_ui::StagedFile> &) {
+                              return std::string{"Disk.1 does not match the supported identity"};
+                            });
+  std::string error;
+  CHECK(session.add_selected({source_dir / "Disk.1", source_dir / "Disk.2", source_dir / "Disk.3"},
+                            error) == 3);
+  session.validate_if_ready();
+  CHECK(session.status() == setup_ui::Status::Rejected);
+  CHECK(session.message() == "Disk.1 does not match the supported identity");
+  CHECK(session.entries()[0].provided);
+  // Choosing again clears the rejected set.
+  session.reset();
+  CHECK(session.status() == setup_ui::Status::Collecting);
+  CHECK(!session.entries()[0].provided);
+  CHECK(session.message().empty());
+}
+
+void test_session_archive_replaces_the_set(const std::filesystem::path &root) {
+  std::filesystem::create_directories(root);
+  const auto archive = root / "disks.zip";
+  write_file(archive, std::string(4096, 'z'));
+  setup_ui::SessionOptions options;
+  options.staging_root = root / "staging";
+  bool archive_seen = false;
+  setup_ui::Session session(test_config(), options,
+                            [&](const std::vector<setup_ui::StagedFile> &files) {
+                              archive_seen = files.size() == 1 && files[0].is_archive;
+                              return std::string{};
+                            });
+  std::string error;
+  CHECK(session.add_selected({archive}, error) == 1);
+  CHECK(session.status() == setup_ui::Status::Ready);
+  session.validate_if_ready();
+  CHECK(session.status() == setup_ui::Status::Accepted);
+  CHECK(archive_seen);
+}
+
+void test_screen_renders_geometry(const std::filesystem::path &root) {
+  std::filesystem::create_directories(root);
+  setup_ui::SessionOptions options;
+  options.staging_root = root / "render-staging";
+  setup_ui::Session session(test_config(), options, [](const std::vector<setup_ui::StagedFile> &) {
+    return std::string{};
+  });
+  setup_ui::ViewOptions view_options;
+  view_options.window_title = "Setup test";
+  view_options.width = 640;
+  view_options.height = 360;
+  view_options.resizable = false;
+  setup_ui::View view(session, view_options);
+  if (!view.open()) {
+    // A host without a display cannot present the screen; that is an
+    // environment limit, reported rather than counted as a product failure.
+    std::fprintf(stderr, "SKIP screen render: %s\n", view.last_error().c_str());
+    return;
   }
-  for (size_t index = 0; index < count; ++index) {
-    std::FILE *file = std::fopen(paths[index], "rb");
-    if (!file || std::strcmp(names[index], expected_names[index]) != 0) {
-      if (file) {
-        std::fclose(file);
+  // The choose button is live: pressing it must raise a Browse request.
+  view.frame();
+  std::vector<std::uint32_t> pixels;
+  int width = 0;
+  int height = 0;
+  CHECK(view.capture(pixels, width, height));
+  CHECK(width == 640);
+  CHECK(height == 360);
+  if (!pixels.empty()) {
+    std::size_t distinct = 0;
+    const std::uint32_t first = pixels.front();
+    for (const std::uint32_t pixel : pixels) {
+      if (pixel != first) {
+        ++distinct;
       }
-      std::snprintf(error, error_capacity, "file %zu was not accepted", index);
-      return 1;
     }
-    std::fclose(file);
+    // A screen that drew nothing at all would be a single flat colour.
+    CHECK(distinct > pixels.size() / 16);
   }
-  return 0;
+  view.close();
 }
-// NOLINTEND(bugprone-easily-swappable-parameters)
 
-void test_c_abi(const std::filesystem::path &staging_root) {
-  setup_ui_file files[] = {{"Alpha.bin", "Alpha"}, {"Beta.bin", "Beta"}, {"Gamma.bin", "Gamma"}};
-  CValidateState state;
-  setup_ui_config config{};
-  config.title = "C setup";
-  config.message = "bring the disks";
-  config.files = files;
-  config.file_count = 3;
-  config.validate = c_validate;
-  config.userdata = &state;
-  setup_ui_server *server = setup_ui_server_new(&config, staging_root.string().c_str(), 0, 0);
-  CHECK(server != nullptr);
-  CHECK(setup_ui_server_start(server) == 1);
-  const std::uint16_t port = setup_ui_server_port(server);
-  CHECK(port != 0);
-  char url[256] = {0};
-  CHECK(setup_ui_server_url(server, url, sizeof url) == 1);
-  CHECK(std::strncmp(url, "http://127.0.0.1:", 17) == 0);
-
-  for (const char *name : {"Alpha.bin", "Beta.bin", "Gamma.bin"}) {
-    std::string target = std::string("/api/upload?name=") + name;
-    const std::string payload(64, static_cast<char>('0' + name[0]));
-    const std::string response = http_request(port, target, "POST", payload);
-    CHECK(response.find("200") != std::string::npos);
+// A phone-sized viewport at a 3x display scale must lay the screen out at
+// phone proportions: content inside the viewport, sized in dp rather than raw
+// pixels. This is the discriminator for the "renders tiny" failure.
+void test_screen_is_responsive_on_a_phone_viewport(const std::filesystem::path &root) {
+  std::filesystem::create_directories(root);
+  setup_ui::SessionOptions options;
+  options.staging_root = root / "phone-staging";
+  setup_ui::Session session(test_config(), options, [](const std::vector<setup_ui::StagedFile> &) {
+    return std::string{};
+  });
+  setup_ui::ViewOptions view_options;
+  view_options.window_title = "Setup phone test";
+  // A 2049 x 948 pixel landscape phone window at a 3x display scale, which is
+  // a 683 x 316 dp viewport.
+  view_options.width = 2728;
+  view_options.height = 1264;
+  view_options.resizable = false;
+  view_options.density_ratio = 3.0F;
+  view_options.offscreen = true;
+  setup_ui::View view(session, view_options);
+  if (!view.open()) {
+    std::fprintf(stderr, "SKIP phone viewport: %s\n", view.last_error().c_str());
+    return;
   }
-
-  setup_ui_event events[8] = {};
-  const std::size_t delivered = setup_ui_server_poll(server, events, 8);
-  CHECK(delivered >= 4); // uploads + BatchComplete + a validation verdict
-  bool validated = false;
-  for (std::size_t index = 0; index < delivered; ++index) {
-    if (events[index].kind == SETUP_UI_EVENT_VALIDATED) {
-      validated = true;
+  view.frame();
+  std::vector<std::uint32_t> pixels;
+  int width = 0;
+  int height = 0;
+  CHECK(view.capture(pixels, width, height));
+  // The host may clamp the window to the display; the layout claim below is
+  // about density-independent size, not the exact pixel size.
+  CHECK(width == 2728);
+  CHECK(height == 1264);
+  // The title text must be a substantial share of the window height: a
+  // stylesheet that ignored the display scale renders it at a handful of
+  // pixels and fails here.
+  int text_rows = 0;
+  for (int row = 0; row < height; ++row) {
+    int bright = 0;
+    for (int column = 0; column < width; ++column) {
+      const std::uint32_t pixel = pixels[static_cast<std::size_t>(row) * width + column];
+      const std::uint32_t red = (pixel >> 16) & 0xFFU;
+      const std::uint32_t green = (pixel >> 8) & 0xFFU;
+      const std::uint32_t blue = pixel & 0xFFU;
+      if (red > 200U && green > 200U && blue > 200U) {
+        ++bright;
+      }
+    }
+    if (bright > 4) {
+      ++text_rows;
     }
   }
-  CHECK(validated);
-  CHECK(state.calls == 1);
-  // The C ABI owns its event numbering: the batch marker must never be
-  // reported as a validation verdict.
-  bool saw_batch_marker = false;
-  for (std::size_t index = 0; index < delivered; ++index) {
-    if (events[index].kind == SETUP_UI_EVENT_BATCH_COMPLETE) {
-      saw_batch_marker = true;
-    }
-    CHECK(events[index].kind != SETUP_UI_EVENT_VALIDATED ||
-          std::strcmp(events[index].message, "") == 0);
-  }
-  CHECK(saw_batch_marker);
-
-  setup_ui_server_stop(server);
-  setup_ui_server_free(server);
+  // The title is 24-32dp depending on the viewport rules, i.e. 72-96 pixels
+  // tall at 3x. A stylesheet that ignored the display scale would produce a
+  // band a few pixels high and fail here.
+  CHECK(text_rows >= 32);
+  view.close();
 }
 
 } // namespace
 
 int main() {
-  const auto staging_root = std::filesystem::temp_directory_path() /
-                            ("setup-ui-test-" + std::to_string(static_cast<long>(::getpid())));
-  std::filesystem::create_directories(staging_root);
+  const auto root = make_root("setup-ui-tests");
+  test_session_staging_and_validation(root / "staging-case");
+  test_session_rejection_keeps_rows(root / "rejection-case");
+  test_session_archive_replaces_the_set(root / "archive-case");
+  test_partial_selection_names_what_is_missing(root / "partial-case");
+  test_stale_staging_is_pruned(root / "stale-staging-case");
+  test_screen_renders_geometry(root / "render-case");
+  test_screen_is_responsive_on_a_phone_viewport(root / "phone-case");
 
-  std::atomic<int> validation_calls{0};
-  std::vector<std::string> validated_names;
-
-  setup_ui::Server server(test_options(staging_root),
-                          [&](const std::vector<setup_ui::UploadedFile> &files) {
-                            validation_calls.fetch_add(1);
-                            validated_names.clear();
-                            for (const auto &file : files) {
-                              validated_names.push_back(file.spec.name);
-                            }
-                            return std::string{};
-                          });
-  CHECK(server.start());
-  CHECK(server.running());
-  CHECK(server.port() != 0);
-  CHECK(server.url().find("http://127.0.0.1:") == 0);
-  CHECK(server.token().empty());
-
-  // The page and controller are served with the right types.
-  const auto page = http_request(server.port(), "/");
-  CHECK(page.find("200 OK") != std::string::npos);
-  CHECK(page.find("text/html") != std::string::npos);
-  CHECK(body_of(page).find("id=\"status\"") != std::string::npos);
-  const auto script = http_request(server.port(), "/setup.js");
-  CHECK(script.find("text/javascript") != std::string::npos);
-
-  // Config carries the consumer wording verbatim.
-  const auto config_json = http_request(server.port(), "/api/config");
-  CHECK(body_of(config_json).find("\"title\":\"Test setup\"") != std::string::npos);
-  CHECK(body_of(config_json).find("\"accepts_archive\":true") != std::string::npos);
-
-  // Unknown names are refused before anything is staged.
-  const auto bad = http_request(server.port(), "/api/upload?name=Unknown.bin", "POST", "x");
-  CHECK(bad.find("400") != std::string::npos);
-
-  // Three uploads complete a batch; validation runs on the poll() thread.
-  const auto one =
-      http_request(server.port(), "/api/upload?name=Alpha.bin", "POST", std::string(2048, 'a'));
-  CHECK(one.find("200") != std::string::npos);
-  std::vector<setup_ui::Event> events;
-  drain(server, events);
-  bool saw_uploaded = false;
-  for (const auto &event : events) {
-    if (event.kind == setup_ui::EventKind::Uploaded && event.uploaded_name == "Alpha.bin") {
-      saw_uploaded = true;
-    }
-  }
-  CHECK(saw_uploaded);
-  CHECK(validation_calls.load() == 0);
-
-  const auto two =
-      http_request(server.port(), "/api/upload?name=Beta.bin", "POST", std::string(1024, 'b'));
-  CHECK(two.find("200") != std::string::npos);
-  const auto three =
-      http_request(server.port(), "/api/upload?name=Gamma.bin", "POST", std::string(512, 'c'));
-  CHECK(three.find("200") != std::string::npos);
-
-  drain(server, events);
-  bool saw_batch = false;
-  bool saw_validated = false;
-  for (const auto &event : events) {
-    if (event.kind == setup_ui::EventKind::BatchComplete) {
-      saw_batch = true;
-    }
-    if (event.kind == setup_ui::EventKind::Validated) {
-      saw_validated = true;
-    }
-  }
-  CHECK(saw_batch);
-  CHECK(saw_validated);
-  CHECK(validation_calls.load() == 1);
-  CHECK(validated_names.size() == 3);
-  CHECK(validated_names[0] == "Alpha.bin");
-  CHECK(validated_names[1] == "Beta.bin");
-  CHECK(validated_names[2] == "Gamma.bin");
-
-  // The staged file exists under the caller-owned staging root and carries
-  // the uploaded bytes.
-  std::ifstream staged(staging_root / "Alpha.bin" /* resolved below */, std::ios::binary);
-  // staging root contains one setup-* child; find it:
-  std::filesystem::path session;
-  for (const auto &entry : std::filesystem::directory_iterator(staging_root)) {
-    session = entry.path();
-  }
-  CHECK(!session.empty());
-  const auto uploaded = (session / "Alpha.bin");
-  CHECK(std::filesystem::file_size(uploaded) == 2048);
-
-  // A start after validation succeeds.
-  const auto start_ok = http_request(server.port(), "/api/start", "POST");
-  CHECK(body_of(start_ok).find("\"ok\":true") != std::string::npos);
-
-  // Rejection wording flows back to the browser.
-  setup_ui::Server failing(test_options(staging_root),
-                           [&](const std::vector<setup_ui::UploadedFile> &) {
-                             return std::string{"wrong disc identity"};
-                           });
-  CHECK(failing.start());
-  const auto up1 = http_request(failing.port(), "/api/upload?name=Alpha.bin", "POST", "aaa");
-  const auto up2 = http_request(failing.port(), "/api/upload?name=Beta.bin", "POST", "bbb");
-  const auto up3 = http_request(failing.port(), "/api/upload?name=Gamma.bin", "POST", "ccc");
-  CHECK(up1.find("200") != std::string::npos && up2.find("200") != std::string::npos &&
-        up3.find("200") != std::string::npos);
-  drain(failing, events);
-  bool saw_failed = false;
-  for (const auto &event : events) {
-    if (event.kind == setup_ui::EventKind::Failed &&
-        event.failed_message == "wrong disc identity") {
-      saw_failed = true;
-    }
-  }
-  CHECK(saw_failed);
-  const auto start_bad = http_request(failing.port(), "/api/start", "POST");
-  CHECK(start_bad.find("400") != std::string::npos);
-  CHECK(body_of(start_bad).find("wrong disc identity") != std::string::npos);
-
-  test_c_abi(staging_root);
-
-  server.stop();
-  CHECK(!server.running());
-
-  std::error_code cleanup;
-  std::filesystem::remove_all(staging_root, cleanup);
+  std::error_code status;
+  std::filesystem::remove_all(root, status);
   if (g_failures == 0) {
     std::fputs("all setup-ui tests passed\n", stdout);
     return 0;

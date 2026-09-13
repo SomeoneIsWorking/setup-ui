@@ -6,39 +6,45 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Lucent supplies the bounded HTTP transport. Resolve the checkout the way the
-# ports do: SETUP_UI_LUCENT_DIR, or a sibling ../lucent directory.
-# Candidate roots: a sibling inside shared/, then the repo-root checkout.
-set(SETUP_UI_LUCENT_DEFAULT "")
-foreach(candidate "${CMAKE_CURRENT_SOURCE_DIR}/../lucent"
-                  "${CMAKE_CURRENT_SOURCE_DIR}/../../lucent")
+# SDL3 supplies the window and the 2D renderer every host already presents
+# through; RmlUi renders the setup document into it.
+if(NOT TARGET SDL3::SDL3 AND NOT TARGET SDL3::SDL3-static)
+    find_package(SDL3 CONFIG REQUIRED)
+endif()
+
+# RmlUi resolves the way the ports resolve their shared checkouts: an explicit
+# SETUP_UI_RMLUI_DIR, or a sibling checkout next to this repository.
+set(SETUP_UI_RMLUI_DEFAULT "")
+foreach(candidate "${CMAKE_CURRENT_SOURCE_DIR}/../RmlUi" "${CMAKE_CURRENT_SOURCE_DIR}/../../RmlUi")
     if(IS_DIRECTORY "${candidate}")
-        set(SETUP_UI_LUCENT_DEFAULT "${candidate}")
+        set(SETUP_UI_RMLUI_DEFAULT "${candidate}")
         break()
     endif()
 endforeach()
-if(DEFINED ENV{SETUP_UI_LUCENT_DIR} AND NOT "$ENV{SETUP_UI_LUCENT_DIR}" STREQUAL "")
-    set(SETUP_UI_LUCENT_DEFAULT "$ENV{SETUP_UI_LUCENT_DIR}")
+if(DEFINED ENV{SETUP_UI_RMLUI_DIR} AND NOT "$ENV{SETUP_UI_RMLUI_DIR}" STREQUAL "")
+    set(SETUP_UI_RMLUI_DEFAULT "$ENV{SETUP_UI_RMLUI_DIR}")
 endif()
-set(SETUP_UI_LUCENT_DIR "${SETUP_UI_LUCENT_DEFAULT}" CACHE PATH "Path to the lucent library")
-get_filename_component(SETUP_UI_LUCENT_DIR "${SETUP_UI_LUCENT_DIR}" ABSOLUTE)
-if(NOT IS_DIRECTORY "${SETUP_UI_LUCENT_DIR}")
+set(SETUP_UI_RMLUI_DIR "${SETUP_UI_RMLUI_DEFAULT}" CACHE PATH "Path to the RmlUi checkout")
+get_filename_component(SETUP_UI_RMLUI_DIR "${SETUP_UI_RMLUI_DIR}" ABSOLUTE)
+if(NOT IS_DIRECTORY "${SETUP_UI_RMLUI_DIR}")
     message(FATAL_ERROR
-        "setup_ui requires lucent at ${SETUP_UI_LUCENT_DIR}; "
-        "provide -DSETUP_UI_LUCENT_DIR=<checkout>")
+        "setup_ui requires an RmlUi checkout at ${SETUP_UI_RMLUI_DIR}; "
+        "provide -DSETUP_UI_RMLUI_DIR=<checkout>")
 endif()
+set(RMLUI_SAMPLES OFF CACHE BOOL "" FORCE)
+# RmlUi defaults to shared libraries and always builds its debugger; a port
+# links it statically and has no debugger UI, so both are turned off here
+# (these settings apply to this subdirectory tree only).
+set(BUILD_SHARED_LIBS OFF)
+set(RMLUI_DEBUGGER OFF CACHE BOOL "" FORCE)
+set(RMLUI_FONT_ENGINE "freetype" CACHE STRING "" FORCE)
+set(RMLUI_PRECOMPILED_HEADERS OFF CACHE BOOL "" FORCE)
+set(RMLUI_COMPILER_OPTIONS OFF CACHE BOOL "" FORCE)
+add_subdirectory("${SETUP_UI_RMLUI_DIR}" "${CMAKE_BINARY_DIR}/rmlui" EXCLUDE_FROM_ALL)
 
-set(LUCENT_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-if(NOT TARGET lucent)
-    add_subdirectory("${SETUP_UI_LUCENT_DIR}" "${CMAKE_BINARY_DIR}/setup-ui/lucent")
-endif()
-
-# Embed the web assets. Defaults come from Config when the consumer passes
-# wording; the generator bakes the consumer's defaults so the page renders
-# complete content even before /api/config returns.
-set(SETUP_UI_TITLE "Setup" CACHE STRING "Default setup page title")
+set(SETUP_UI_TITLE "Setup" CACHE STRING "Default setup screen title")
 set(SETUP_UI_MESSAGE "Choose your files to continue." CACHE STRING "Default setup message")
-set(SETUP_UI_HINT "" CACHE STRING "Default hint under the drop zone")
+set(SETUP_UI_HINT "" CACHE STRING "Default hint under the choose button")
 set(SETUP_UI_FOOTER "" CACHE STRING "Default footer text")
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -46,34 +52,34 @@ set(SETUP_UI_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY "${SETUP_UI_GENERATED_DIR}")
 add_custom_command(
     OUTPUT "${SETUP_UI_GENERATED_DIR}/assets.cpp" "${SETUP_UI_GENERATED_DIR}/assets.h"
-    COMMAND "${Python3_EXECUTABLE}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed_assets.py"
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed_assets.py"
             --assets "${CMAKE_CURRENT_SOURCE_DIR}/assets"
             --source "${SETUP_UI_GENERATED_DIR}/assets.cpp"
             --header "${SETUP_UI_GENERATED_DIR}/assets.h"
-            --title "${SETUP_UI_TITLE}"
-            --message "${SETUP_UI_MESSAGE}"
-            --hint "${SETUP_UI_HINT}"
-            --footer "${SETUP_UI_FOOTER}"
-    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/assets/index.html"
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/setup.js"
+            --title "${SETUP_UI_TITLE}" --message "${SETUP_UI_MESSAGE}"
+            --hint "${SETUP_UI_HINT}" --footer "${SETUP_UI_FOOTER}"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/assets/setup.rml"
+            "${CMAKE_CURRENT_SOURCE_DIR}/assets/setup.rcss"
             "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed_assets.py"
     VERBATIM)
 
 add_library(setup_ui STATIC
-    src/setup_ui.cpp
-    src/setup_ui_c.cpp
+    src/session.cpp
+    src/view.cpp
+    src/rml_sdl_renderer.cpp
     "${SETUP_UI_GENERATED_DIR}/assets.cpp")
 add_library(setup_ui::setup_ui ALIAS setup_ui)
 target_include_directories(setup_ui PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<BUILD_INTERFACE:${SETUP_UI_GENERATED_DIR}>
     $<INSTALL_INTERFACE:include>)
-target_link_libraries(setup_ui PUBLIC lucent::lucent)
+target_link_libraries(setup_ui PUBLIC RmlUi::RmlUi)
+if(TARGET SDL3::SDL3)
+    target_link_libraries(setup_ui PUBLIC SDL3::SDL3)
+else()
+    target_link_libraries(setup_ui PUBLIC SDL3::SDL3-static)
+endif()
 target_compile_options(setup_ui PRIVATE -Wall -Wextra -Wpedantic)
-
-find_package(Threads REQUIRED)
-target_link_libraries(setup_ui PUBLIC Threads::Threads)
 
 enable_testing()
 add_executable(setup_ui_tests tests/test_setup_ui.cpp)
