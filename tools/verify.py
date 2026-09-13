@@ -1,41 +1,29 @@
 #!/usr/bin/env python3
-"""setup-ui's normal verifier: Python lint + tests, C++ format, clang-tidy, CTest."""
+"""setup-ui's normal verifier: Python lint, C++ build, clang-tidy, CTest."""
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-C_SOURCES = sorted(
-    str(path)
-    for pattern in ("src/*.cpp", "include/**/*.h", "tests/*.cpp", "tools/*.py")
-    for path in ROOT.glob(pattern)
-    if path.is_file() and path.suffix in (".cpp", ".h", ".py")
+TIDY_SOURCES = (
+    "src/session.cpp",
+    "src/view.cpp",
+    "src/rml_sdl_renderer.cpp",
+    "tests/test_setup_ui.cpp",
 )
 
 
-def run(command: list[str], *, env: dict[str, str] | None = None) -> None:
+def run(command: list[str]) -> None:
     print("verify:", " ".join(command))
-    subprocess.run(command, cwd=ROOT, check=True, env=env or os.environ)
-
-
-def require(name: str, variable: str) -> str:
-    path = os.environ.get(variable) or shutil.which(name)
-    if not path:
-        raise SystemExit(f"verify: {name} is required; set {variable} or install it")
-    return path
+    subprocess.run(command, cwd=ROOT, check=True)
 
 
 def main() -> int:
-    run(
-        [sys.executable, "-m", "ruff", "format", "--check", "tools", "tests"]
-        if False
-        else [sys.executable, "-m", "ruff", "format", "--check", "tools"]
-    )
+    run([sys.executable, "-m", "ruff", "format", "--check", "tools"])
     run([sys.executable, "-m", "ruff", "check", "tools"])
 
     build = ROOT / "build"
@@ -50,23 +38,13 @@ def main() -> int:
                 "-G",
                 "Ninja",
                 "-DCMAKE_CXX_COMPILER=clang++",
-                "-DCMAKE_BUILD_TYPE=Release",
+                "-DCMAKE_BUILD_TYPE=Debug",
             ]
         )
     run(["cmake", "--build", "build"])
-    require("clang-tidy", "CLANG_TIDY")
-    compile_db = build / "compile_commands.json"
-    if not compile_db.is_file():
-        raise SystemExit("verify: build did not produce compile_commands.json")
-    tidy_sources = [
-        str(ROOT / path)
-        for path in (
-            "src/setup_ui.cpp",
-            "src/setup_ui_c.cpp",
-            "tests/test_setup_ui.cpp",
-        )
-    ]
-    run(["clang-tidy", "-p", "build", *tidy_sources])
+    if not shutil.which("clang-tidy"):
+        raise SystemExit("verify: clang-tidy is required")
+    run(["clang-tidy", "-p", "build", *[str(ROOT / path) for path in TIDY_SOURCES]])
     run(["ctest", "--test-dir", "build", "--output-on-failure"])
     print("verify: all checks passed")
     return 0

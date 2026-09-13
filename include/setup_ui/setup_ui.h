@@ -1,23 +1,31 @@
-// setup_ui.h — the browser-based first-run setup subsystem for native game
-// ports.
+// setup_ui.h — an in-app first-run setup screen for native game ports.
 //
-// A consumer that needs player-supplied files (disc images, ROMs, disk sets)
-// constructs one Server, hands it a validator, and lets the player drive a
-// responsive web page from any browser on this device or a phone sharing the
-// network. The server stages every uploaded byte under a caller-owned private
-// directory; the consumer's validator owns file identity and the decision to
-// proceed. Nothing here knows what a valid file is.
+// A port that needs player-supplied files (disc images, ROMs, disk sets)
+// shows this screen inside its own window instead of opening a browser or a
+// system message box. The screen owns presentation and staged-file state; the
+// consumer owns the platform's file picker, file identity, persistence, and
+// the decision to start.
 //
-// Threading: construct, start, and poll on the application's main thread;
-// upload workers live inside the host. Poll returns the lifecycle events the
-// consumer acts on (validation requests, completion, browser-open requests).
-// The consumer's validator runs on the poll() caller's thread.
+// Layout: Session holds what the title requires and what has been provided.
+// View renders a Session through RmlUi (HTML/CSS-like markup) in an SDL3
+// window and reports the player's requests back as events. A consumer loop
+// looks like:
 //
-// Security: loopback is the default. LocalNetwork mode is an explicit,
-// user-visible choice; every route then requires the one-time pairing token
-// the consumer displays, and sharing stops with stop() or destruction.
+//   setup_ui::Session session(config, validator);
+//   setup_ui::View view(session, view_options);
+//   if (!view.open()) { ... }
+//   while (view.running()) {
+//     for (const auto &request : view.poll()) {
+//       if (request.kind == setup_ui::RequestKind::Browse)
+//         platform_picker([&](auto paths) { session.add_selected(paths); });
+//     }
+//     view.frame();
+//   }
+//
+// Everything here runs on the thread that owns the SDL window.
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -26,92 +34,146 @@
 
 namespace setup_ui {
 
-enum class Scope : std::uint8_t { Loopback, LocalNetwork };
-
+// One required input, in the order the player should provide them.
 struct FileSpec {
-  std::string key;   // stable identifier used by the wire protocol ("disk1")
+  std::string key;   // stable identifier used by the consumer ("disk1")
   std::string name;  // exact expected file name ("Disk.1")
-  std::string label; // human-readable step label ("Game disc 1")
+  std::string label; // human-readable row label ("Game disc 1")
 };
 
 struct Config {
-  std::string title;   // page <h1> and browser tab title
-  std::string message; // one-line instruction under the title
-  std::string hint;    // small print under the drop zone ("or one ZIP …")
-  std::string footer;  // small print at the bottom (privacy, brand)
+  std::string title;   // screen heading and window title
+  std::string message; // one line under the heading
+  std::string hint;    // small print under the choose button
+  std::string footer;  // small print at the bottom
   std::vector<FileSpec> files;
-  bool accepts_archive = false; // one bounded ZIP containing the set
+  bool accepts_archive = false; // one bounded ZIP containing the whole set
 };
 
-struct UploadedFile {
+// One required row as the screen shows it.
+struct Entry {
   FileSpec spec;
-  std::filesystem::path path; // staged file inside the caller's staging root
+  bool provided = false;
   std::uintmax_t size = 0;
-  bool is_archive = false; // accepted via accepts_archive
 };
 
-// What poll() hands the consumer. The consumer runs its own validation inside
-// the Validate callback of the options; events exist for progress display and
-// for launching the browser at the right moment.
-enum class EventKind : std::uint8_t {
-  Started,       // the listener is up; port carries the bound port
-  Uploaded,      // one file landed in staging; uploaded carries name/size
-  BatchComplete, // every expected file has arrived; the validator runs on poll()
-  Validated,     // the consumer's Validate callback returned success
-  Failed,        // validation failed; failed_message carries the validator's text
+enum class Status : std::uint8_t {
+  Collecting, // waiting for the player to provide files
+  Ready,      // every requirement is present; worth validating
+  Rejected,   // the validator refused the set; message() says why
+  Accepted,   // the validator accepted the set; the consumer may start
 };
 
-struct Event {
-  EventKind kind;
-  std::string failed_message; // Failed only
-  std::string uploaded_name;  // Uploaded only
-  std::uintmax_t uploaded_size = 0;
-  std::uint16_t port = 0; // Started only
+// The consumer's policy over a complete staged set. Called on the same thread
+// that drives the View. Returns an empty string to accept, or a
+// human-readable reason to reject. `files` are staged, readable paths.
+struct StagedFile {
+  FileSpec spec;
+  std::filesystem::path path;
+  std::uintmax_t size = 0;
+  bool is_archive = false;
 };
+using Validator = std::function<std::string(const std::vector<StagedFile> &)>;
 
-// The staged set is complete when Validate receives files.size() ==
-// options.config.files.size() (or the single archive when accepts_archive is
-// set). Validate returns an empty error string on success; a non-empty string
-// is shown verbatim in the browser and the consumer must clean its own state.
-using Validate = std::function<std::string(const std::vector<UploadedFile> &)>;
-
-struct ServerOptions {
-  Config config;
-  // Private parent directory for staged uploads. Created when missing; the
-  // host stages under one private child per attempt and owns its cleanup.
+// Where staged uploads live. The consumer supplies a private directory; the
+// session creates and cleans one child per attempt.
+struct SessionOptions {
   std::filesystem::path staging_root;
-  Scope scope = Scope::Loopback;
   std::size_t max_file_bytes = 64ULL * 1024ULL * 1024ULL;
-  int timeout_seconds = 600; // idle listener lifetime; consumer may stop sooner
 };
 
-// One setup session. Copy/move are deleted: the server owns live sockets.
-class Server {
+class Session {
 public:
-  explicit Server(ServerOptions options, Validate validate);
-  ~Server();
+  Session(Config config, SessionOptions options, Validator validator);
+  ~Session();
+  Session(const Session &) = delete;
+  Session &operator=(const Session &) = delete;
 
-  Server(const Server &) = delete;
-  Server &operator=(const Server &) = delete;
-  Server(Server &&) = delete;
-  Server &operator=(Server &&) = delete;
+  // Adds every selected file that matches a requirement by exact name, plus
+  // one archive when the config allows it. Copies the bytes into staging.
+  // Returns the count added; `error` names the first rejection.
+  std::size_t add_selected(const std::vector<std::filesystem::path> &paths, std::string &error);
 
-  // Binds and starts serving. Returns false (with last_error()) when the
-  // listener cannot start. Idempotent while running.
-  bool start();
-  void stop();
+  // Removes staged state so the player can choose again.
+  void reset();
 
-  // Non-blocking. Delivers lifecycle events and invokes the validator on the
-  // calling thread when an upload batch completes.
-  void poll(std::vector<Event> &out);
+  // Runs the validator when every requirement is present (idempotent per set).
+  void validate_if_ready();
 
-  // URL the browser should open (loopback, or the LAN address with token).
-  std::string url() const;
-  // Token appended to LAN URLs; empty in loopback mode.
-  std::string token() const;
-  std::uint16_t port() const;
+  const Config &config() const;
+  const std::vector<Entry> &entries() const;
+  Status status() const;
+  const std::string &message() const;      // rejection or completion text
+  double progress() const;                 // 0..1 bytes staged for the current copy
+  void set_progress(double fraction);      // consumer copy progress (0..1)
+  const std::string &staging_directory() const;
+
+  // Removes the staging directories an earlier session left behind. A session
+  // removes its own directory when it is destroyed, but a process that is
+  // killed with the screen open (Android force-stop, a crash) never runs that
+  // destructor, and a half-copied directory is never reusable.
+  static void discard_stale_staging(const std::filesystem::path &staging_root);
+
+private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
+
+enum class RequestKind : std::uint8_t {
+  Browse, // the player asked to choose files
+  Start,  // the player confirmed a validated set
+  Cancel, // the player dismissed the screen
+};
+
+struct Request {
+  RequestKind kind;
+};
+
+struct ViewOptions {
+  std::string window_title = "Setup";
+  int width = 960;
+  int height = 540;
+  bool resizable = true;
+  // Font used by the screen. Empty selects the first usable system font; a
+  // consumer may name an exact file it ships.
+  std::string font_path;
+  // dp ratio. Zero follows the host display scale (the normal case); a value
+  // pins it, which is how a phone-sized screen is reproduced on a desktop for
+  // verification.
+  float density_ratio = 0.0F;
+  // Render to an offscreen surface instead of a window. Used for exact-size
+  // verification (a phone viewport larger than the build host's display) and
+  // for hosts that present elsewhere.
+  bool offscreen = false;
+};
+
+// The setup screen: an SDL3 window rendering a Session through RmlUi.
+class View {
+public:
+  View(Session &session, ViewOptions options);
+  ~View();
+  View(const View &) = delete;
+  View &operator=(const View &) = delete;
+
+  // Creates the window, renderer, and document. Returns false with
+  // last_error() set when the platform cannot present the screen.
+  bool open();
+  void close();
   bool running() const noexcept;
+
+  // Player requests since the last call.
+  std::vector<Request> poll();
+  // Renders one frame and processes input. Cheap enough to call every frame.
+  void frame();
+
+  // Ends the loop after the consumer finished starting from an accepted set.
+  void finish();
+
   const std::string &last_error() const noexcept;
+
+  // Test seam: renders the current document into an ARGB8888 buffer of the
+  // view's size without a window. Requires SDL video to be available.
+  bool capture(std::vector<std::uint32_t> &pixels, int &width, int &height);
 
 private:
   struct Impl;
