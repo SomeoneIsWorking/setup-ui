@@ -28,9 +28,10 @@ if(NOT IS_DIRECTORY "${SETUP_UI_LUCENT_DIR}")
         "provide -DSETUP_UI_LUCENT_DIR=<checkout>")
 endif()
 
-set(SETUP_UI_SETUP_UI OFF CACHE BOOL "" FORCE)
 set(LUCENT_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-add_subdirectory("${SETUP_UI_LUCENT_DIR}" "${CMAKE_BINARY_DIR}/lucent")
+if(NOT TARGET lucent)
+    add_subdirectory("${SETUP_UI_LUCENT_DIR}" "${CMAKE_BINARY_DIR}/setup-ui/lucent")
+endif()
 
 # Embed the web assets. Defaults come from Config when the consumer passes
 # wording; the generator bakes the consumer's defaults so the page renders

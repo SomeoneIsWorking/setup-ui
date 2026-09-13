@@ -176,6 +176,17 @@ void test_c_abi(const std::filesystem::path &staging_root) {
   }
   CHECK(validated);
   CHECK(state.calls == 1);
+  // The C ABI owns its event numbering: the batch marker must never be
+  // reported as a validation verdict.
+  bool saw_batch_marker = false;
+  for (std::size_t index = 0; index < delivered; ++index) {
+    if (events[index].kind == SETUP_UI_EVENT_BATCH_COMPLETE) {
+      saw_batch_marker = true;
+    }
+    CHECK(events[index].kind != SETUP_UI_EVENT_VALIDATED ||
+          std::strcmp(events[index].message, "") == 0);
+  }
+  CHECK(saw_batch_marker);
 
   setup_ui_server_stop(server);
   setup_ui_server_free(server);
