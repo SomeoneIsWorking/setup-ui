@@ -27,6 +27,13 @@ their shared checkouts:
 - RmlUi: `SETUP_UI_RMLUI_DIR` or a sibling `../RmlUi` / `../../RmlUi` checkout
   (the port builds it static with the debugger off).
 - SDL3: `find_package(SDL3)` from the consumer's own toolchain.
+- Freetype: RmlUi's font engine, from the first source that provides it — a
+  `Freetype::Freetype` the consumer already declared (Android takes it from the
+  shared Android prefix), a Freetype CMake package on the host, or a Freetype
+  checkout at `SETUP_UI_FREETYPE_DIR` / `../freetype` built here as a static
+  library. A packaged product links the static build so it ships no font-engine
+  runtime it would have to bundle; the browser toolchain's Freetype port is used
+  through the same target.
 - Fonts: resolved from the host at runtime (a system sans on desktop,
   `/system/fonts/Roboto-Regular.ttf` on Android); no font asset is bundled.
 
