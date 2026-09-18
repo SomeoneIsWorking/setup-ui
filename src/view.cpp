@@ -283,6 +283,7 @@ struct View::Impl {
   Rml::Element *message = nullptr;
   Rml::Element *hint = nullptr;
   Rml::Element *footer = nullptr;
+  Rml::Element *browse = nullptr;
   Rml::Element *rows = nullptr;
   Rml::Element *status = nullptr;
   Rml::Element *start = nullptr;
@@ -316,6 +317,9 @@ struct View::Impl {
     }
     if (footer != nullptr) {
       footer->SetInnerRML(escape(config.footer));
+    }
+    if (browse != nullptr) {
+      browse->SetInnerRML(escape(config.browse_label));
     }
   }
 
@@ -373,7 +377,11 @@ struct View::Impl {
       progress_fill->SetProperty("width", width.str());
     }
     if (progress != nullptr) {
-      progress->SetProperty("visibility", session->progress() > 0.0 ? "visible" : "hidden");
+      const bool running_copy = session->progress() > 0.0;
+      progress->SetProperty("visibility", running_copy ? "visible" : "hidden");
+      // The shortest viewports cannot afford to reserve the bar's height, so
+      // the stylesheet gives it size only while this class is set.
+      progress->SetClass("running", running_copy);
     }
     rebuild_rows();
   }
@@ -593,6 +601,7 @@ bool View::open() {
   impl_->message = impl_->document->GetElementById("message");
   impl_->hint = impl_->document->GetElementById("hint");
   impl_->footer = impl_->document->GetElementById("footer");
+  impl_->browse = impl_->document->GetElementById("browse");
   impl_->rows = impl_->document->GetElementById("rows");
   impl_->status = impl_->document->GetElementById("status");
   impl_->start = impl_->document->GetElementById("start");
@@ -605,8 +614,8 @@ bool View::open() {
   impl_->start_listener = std::make_unique<ButtonListener>(impl_->queue, RequestKind::Start);
   impl_->cancel_listener = std::make_unique<ButtonListener>(impl_->queue, RequestKind::Cancel);
   impl_->again_listener = std::make_unique<ButtonListener>(impl_->queue, RequestKind::Browse);
-  if (auto *browse = impl_->document->GetElementById("browse")) {
-    browse->AddEventListener(Rml::EventId::Click, impl_->browse_listener.get());
+  if (impl_->browse != nullptr) {
+    impl_->browse->AddEventListener(Rml::EventId::Click, impl_->browse_listener.get());
   }
   if (impl_->start != nullptr) {
     impl_->start->AddEventListener(Rml::EventId::Click, impl_->start_listener.get());
