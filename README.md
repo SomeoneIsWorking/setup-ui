@@ -86,6 +86,49 @@ left behind (Android force-stop, a crash), which its destructor never removed.
 `offscreen` (render into an exactly sized software surface), so a
 phone-sized viewport can be captured for verification on another host.
 
+## Adopting this in a port
+
+A port that makes a player find a ROM, disc image, or install on their own —
+through a terminal argument, an environment variable, or a system message box —
+replaces that with this screen. Two ports have done it and are worth reading
+before a third: **Benefactor** (`src/platform/setup_flow.cpp`, three named disk
+images, staged) and **LF2** (`runtime/ui/setup_screen{,_policy}.cpp`, one
+judged location, adopted). A single-ROM emulator port is LF2's shape.
+
+Decide two things before writing anything:
+
+1. **Named set or one judged selection.** If the port needs specific files it
+   can name, list them and let a ZIP stand in. If a player may point at any one
+   of several differently named things that all mean "the game" — a `.gb`, a
+   `.zip` of it, an installer, a folder — use the single unnamed `FileSpec` and
+   put the knowing in your Validator. Do not try to recognise a ROM by
+   extension in the config; extensions are not identity.
+2. **Stage or Adopt.** Stage when the port wants its own private copy and the
+   selection is a self-contained file. Adopt when the selection is a directory,
+   or a file whose neighbours are part of the install. Adopt also suits a port
+   whose own resolver already copies or extracts into user data, since staging
+   would be a second copy of the same bytes.
+
+What stays yours, not this module's: the platform picker, the title's identity
+and validation, where an accepted selection is persisted (the OS user-data
+directory — never the checkout or the mount), and the Android commit of a
+staged tree. What belongs here instead of in your port: anything about how the
+screen looks, lays out, or reads.
+
+Three things that have bitten a consumer:
+
+- **Reuse the RmlUi target you already have.** A title that links RmlUi for its
+  own UI must `add_subdirectory` this module *after* RmlUi and SDL3; the build
+  reuses an existing `RmlUi::RmlUi` rather than configuring a second copy.
+- **RmlUi version skew is this module's problem, not yours.** If something here
+  fails to compile against the RmlUi your port pins, fix it here to use API
+  every pinned version has. Bumping a consumer's RmlUi to adopt a setup screen
+  is the wrong way round.
+- **Verify at a landscape handset, not just a desktop window.** 2340x1080 at
+  density 3.0 is 780x360 dp and is the shortest viewport this screen meets.
+  Capture it with `ViewOptions::offscreen` plus `tools/frame_png.py` and look
+  at whether Start and the footer are on screen.
+
 ## Verifier
 
 `uv run --frozen python tools/verify.py` runs Python lint, the CMake build,
