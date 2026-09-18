@@ -7,7 +7,6 @@
 #include "setup_ui/setup_ui.h"
 
 #include <algorithm>
-#include <cctype>
 #include <cstdio>
 #include <fstream>
 #include <random>
@@ -27,30 +26,6 @@ std::string random_suffix() {
     suffix.push_back(kAlphabet[pick(engine)]);
   }
   return suffix;
-}
-
-std::string to_lower(const std::string &value) {
-  std::string lowered = value;
-  std::transform(lowered.begin(), lowered.end(), lowered.begin(),
-                 [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-  return lowered;
-}
-
-// True when `name` ends with one of `extensions` (case-insensitive). Used only
-// to recognize the single-file archive substitute; it never inspects bytes.
-bool matches_archive_extension(const std::string &name, const std::vector<std::string> &extensions) {
-  const std::string lowered_name = to_lower(name);
-  for (const std::string &extension : extensions) {
-    const std::string lowered_extension = to_lower(extension);
-    if (lowered_extension.empty() || lowered_extension.size() >= lowered_name.size()) {
-      continue;
-    }
-    if (lowered_name.compare(lowered_name.size() - lowered_extension.size(), lowered_extension.size(),
-                            lowered_extension) == 0) {
-      return true;
-    }
-  }
-  return false;
 }
 
 } // namespace
@@ -76,8 +51,19 @@ struct Session::Impl {
     return nullptr;
   }
 
+  // The single unnamed requirement, when the port asks for one selection it
+  // judges itself rather than a set of exactly-named files.
+  const FileSpec *catch_all_spec() const {
+    if (config.files.size() != 1 || !config.files.front().name.empty()) {
+      return nullptr;
+    }
+    return &config.files.front();
+  }
+
   bool ensure_staging() {
-    if (!staging.empty()) {
+    // Nothing is copied when the player's own location is adopted, so no
+    // private directory is created for it either.
+    if (config.placement == Placement::Adopt || !staging.empty()) {
       return true;
     }
     std::error_code status_code;
@@ -96,9 +82,40 @@ struct Session::Impl {
     return true;
   }
 
-  // Copies one chosen file into the private staging directory.
-  bool stage_file(const FileSpec &spec, const std::filesystem::path &source, bool is_archive,
+  // Makes one chosen path available to the validator, by the config's
+  // placement: a private copy, or the player's own location as it stands.
+  bool place_file(const FileSpec &spec, const std::filesystem::path &source, bool is_archive,
                   std::string &error) {
+    if (config.placement == Placement::Adopt) {
+      return adopt_file(spec, source, is_archive, error);
+    }
+    return copy_into_staging(spec, source, is_archive, error);
+  }
+
+  // Takes the player's location as it stands. A directory is the normal case
+  // for a port whose game files are an existing install, so it is accepted
+  // here and its size reported as zero; what the location must contain is the
+  // consumer's Validator to judge.
+  bool adopt_file(const FileSpec &spec, const std::filesystem::path &source, bool is_archive,
+                  std::string &error) {
+    std::error_code status_code;
+    const bool directory = std::filesystem::is_directory(source, status_code);
+    if (!directory && !std::filesystem::is_regular_file(source, status_code)) {
+      error = "the selected location could not be read";
+      return false;
+    }
+    std::uintmax_t size = 0;
+    if (!directory) {
+      const auto measured = std::filesystem::file_size(source, status_code);
+      size = status_code ? 0 : measured;
+    }
+    staged.push_back(StagedFile{spec, source, size, is_archive});
+    return true;
+  }
+
+  // Copies one chosen file into the private staging directory.
+  bool copy_into_staging(const FileSpec &spec, const std::filesystem::path &source, bool is_archive,
+                         std::string &error) {
     std::error_code status_code;
     const auto size = std::filesystem::file_size(source, status_code);
     if (status_code || !std::filesystem::is_regular_file(source, status_code)) {
@@ -109,12 +126,7 @@ struct Session::Impl {
       error = "the selected file is larger than this setup accepts";
       return false;
     }
-    // The staged leaf keeps the source's own extension for the archive
-    // substitute (a downstream consumer, such as a game port's installer
-    // dispatch, decides what to do by extension), and the exact required name
-    // for an ordinary requirement.
-    const std::string leaf =
-        is_archive ? ("archive-" + random_suffix() + source.extension().string()) : spec.name;
+    const std::string leaf = is_archive ? ("archive-" + random_suffix() + ".zip") : spec.name;
     const std::filesystem::path target = std::filesystem::path(staging) / leaf;
     std::filesystem::copy_file(source, target, std::filesystem::copy_options::overwrite_existing,
                               status_code);
@@ -206,11 +218,31 @@ std::size_t Session::add_selected(const std::vector<std::filesystem::path> &path
     error = impl_->message;
     return 0;
   }
+  // A port that asks for one selection it judges itself takes whatever was
+  // chosen, and each new choice replaces the last.
+  if (const FileSpec *any = impl_->catch_all_spec(); any != nullptr) {
+    if (paths.size() != 1) {
+      error = "choose a single file or folder";
+      return 0;
+    }
+    const FileSpec spec = *any;
+    reset();
+    if (!impl_->ensure_staging()) {
+      error = impl_->message;
+      return 0;
+    }
+    if (!impl_->place_file(spec, paths.front(), false, error)) {
+      return 0;
+    }
+    impl_->apply_staged_to_entries();
+    impl_->refresh_ready();
+    return 1;
+  }
   // One archive replaces the whole set; otherwise every selection must match a
   // requirement by exact name.
   if (impl_->config.accepts_archive && paths.size() == 1) {
     const std::string name = paths.front().filename().string();
-    const bool archive = matches_archive_extension(name, impl_->config.archive_extensions);
+    const bool archive = name.size() > 4 && name.compare(name.size() - 4, 4, ".zip") == 0;
     if (archive) {
       reset();
       if (!impl_->ensure_staging()) {
@@ -218,7 +250,7 @@ std::size_t Session::add_selected(const std::vector<std::filesystem::path> &path
         return 0;
       }
       FileSpec archive_spec{"archive", name, name};
-      if (!impl_->stage_file(archive_spec, paths.front(), true, error)) {
+      if (!impl_->place_file(archive_spec, paths.front(), true, error)) {
         return 0;
       }
       impl_->status = Status::Ready;
@@ -244,7 +276,7 @@ std::size_t Session::add_selected(const std::vector<std::filesystem::path> &path
       continue;
     }
     std::string copy_error;
-    if (!impl_->stage_file(*spec, path, false, copy_error)) {
+    if (!impl_->place_file(*spec, path, false, copy_error)) {
       if (error.empty()) {
         error = copy_error;
       }
@@ -309,7 +341,7 @@ void Session::validate_if_ready() {
   std::string verdict = impl_->validator(impl_->staged);
   if (verdict.empty()) {
     impl_->status = Status::Accepted;
-    impl_->message = "Disk set accepted.";
+    impl_->message = impl_->config.accepted_message;
     return;
   }
   // A rejected set stays staged so its rows remain visible; the player can

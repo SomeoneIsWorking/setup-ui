@@ -202,54 +202,97 @@ void test_session_archive_replaces_the_set(const std::filesystem::path &root) {
   CHECK(archive_seen);
 }
 
-// A consumer such as a game port that also accepts the original installer
-// executable configures a second archive extension; the default (ZIP-only)
-// behavior above must be unaffected by that capability existing.
-void test_session_archive_extensions_can_be_extended(const std::filesystem::path &root) {
+// A port whose game files are one install — a ROM, an original installer, or
+// an existing tree — asks for a single selection it judges itself, and adopts
+// the player's own location instead of copying the chosen file away from its
+// siblings. LF2 is the first such consumer.
+void test_one_selection_is_adopted_where_the_player_keeps_it(const std::filesystem::path &root) {
   std::filesystem::create_directories(root);
-  setup_ui::Config config = test_config();
-  config.archive_extensions = {".zip", ".exe"};
+  setup_ui::Config config;
+  config.title = "LF2 setup";
+  config.files = {setup_ui::FileSpec{"install", "", "Little Fighter 2 v2.0a install"}};
+  config.placement = setup_ui::Placement::Adopt;
+  config.accepted_message = "Game files accepted.";
+  setup_ui::SessionOptions options;
+  options.staging_root = root / "unused-staging";
+  // Deliberately smaller than the selection: an adopted location is never
+  // copied, so the staging byte bound must not apply to it.
+  options.max_file_bytes = 16;
 
-  // A .exe selection is accepted as the substitute, and the staged file keeps
-  // the .exe extension rather than being forced to .zip.
-  {
-    const auto installer = root / "installer" / "LF2_v2.0a.exe";
-    std::filesystem::create_directories(installer.parent_path());
-    write_file(installer, std::string(4096, 'i'));
-    setup_ui::SessionOptions options;
-    options.staging_root = root / "exe-staging";
-    bool saw_exe = false;
-    setup_ui::Session session(config, options, [&](const std::vector<setup_ui::StagedFile> &files) {
-      saw_exe = files.size() == 1 && files[0].is_archive &&
-               files[0].path.extension() == ".exe";
-      return std::string{};
-    });
-    std::string error;
-    CHECK(session.add_selected({installer}, error) == 1);
-    CHECK(session.status() == setup_ui::Status::Ready);
-    session.validate_if_ready();
-    CHECK(session.status() == setup_ui::Status::Accepted);
-    CHECK(saw_exe);
-  }
+  // An original installer executable, chosen where the player keeps it.
+  const auto installer = root / "downloads" / "LF2_v2.0a.exe";
+  std::filesystem::create_directories(installer.parent_path());
+  write_file(installer, std::string(4096, 'i'));
 
-  // A plain .zip still works when both extensions are configured.
-  {
-    const auto archive = root / "still-zip.zip";
-    write_file(archive, std::string(2048, 'z'));
-    setup_ui::SessionOptions options;
-    options.staging_root = root / "zip-staging";
-    bool saw_zip = false;
-    setup_ui::Session session(config, options, [&](const std::vector<setup_ui::StagedFile> &files) {
-      saw_zip = files.size() == 1 && files[0].is_archive &&
-               files[0].path.extension() == ".zip";
-      return std::string{};
-    });
-    std::string error;
-    CHECK(session.add_selected({archive}, error) == 1);
-    session.validate_if_ready();
-    CHECK(session.status() == setup_ui::Status::Accepted);
-    CHECK(saw_zip);
-  }
+  std::filesystem::path judged;
+  setup_ui::Session session(config, options, [&](const std::vector<setup_ui::StagedFile> &files) {
+    if (files.size() != 1) {
+      return std::string{"expected one selection"};
+    }
+    judged = files.front().path;
+    return std::string{};
+  });
+
+  std::string error;
+  CHECK(session.add_selected({installer}, error) == 1);
+  CHECK(error.empty());
+  CHECK(session.entries().size() == 1);
+  CHECK(session.entries().front().provided);
+  CHECK(session.status() == setup_ui::Status::Ready);
+  session.validate_if_ready();
+  CHECK(session.status() == setup_ui::Status::Accepted);
+  CHECK(session.message() == "Game files accepted.");
+  // The validator saw the player's own path, and nothing was copied.
+  CHECK(judged == installer);
+  CHECK(session.staging_directory().empty());
+  CHECK(!std::filesystem::exists(options.staging_root));
+  CHECK(std::filesystem::exists(installer));
+}
+
+// The same shape accepts a directory — an existing install tree — which the
+// staging placement could never carry, and a second choice replaces the first.
+void test_one_selection_accepts_a_directory_and_replaces(const std::filesystem::path &root) {
+  std::filesystem::create_directories(root);
+  setup_ui::Config config;
+  config.files = {setup_ui::FileSpec{"install", "", "Game install"}};
+  config.placement = setup_ui::Placement::Adopt;
+  setup_ui::SessionOptions options;
+  options.staging_root = root / "unused-staging";
+
+  const auto tree = root / "LF2";
+  std::filesystem::create_directories(tree / "data");
+  write_file(tree / "lf2.exe", std::string(512, 'x'));
+
+  std::vector<std::filesystem::path> judged;
+  setup_ui::Session session(config, options, [&](const std::vector<setup_ui::StagedFile> &files) {
+    judged.clear();
+    for (const setup_ui::StagedFile &file : files) {
+      judged.push_back(file.path);
+    }
+    return std::string{};
+  });
+
+  std::string error;
+  CHECK(session.add_selected({tree}, error) == 1);
+  session.validate_if_ready();
+  CHECK(session.status() == setup_ui::Status::Accepted);
+  CHECK(judged.size() == 1);
+  CHECK(judged.front() == tree);
+
+  // Choosing again replaces the set rather than adding a second requirement.
+  const auto other = root / "elsewhere" / "lf2.exe";
+  std::filesystem::create_directories(other.parent_path());
+  write_file(other, std::string(512, 'y'));
+  CHECK(session.add_selected({other}, error) == 1);
+  CHECK(session.entries().size() == 1);
+  session.validate_if_ready();
+  CHECK(session.status() == setup_ui::Status::Accepted);
+  CHECK(judged.size() == 1);
+  CHECK(judged.front() == other);
+
+  // Two paths cannot satisfy a single unnamed requirement.
+  CHECK(session.add_selected({tree, other}, error) == 0);
+  CHECK(!error.empty());
 }
 
 void test_screen_renders_geometry(const std::filesystem::path &root) {
@@ -359,7 +402,8 @@ int main() {
   test_session_staging_and_validation(root / "staging-case");
   test_session_rejection_keeps_rows(root / "rejection-case");
   test_session_archive_replaces_the_set(root / "archive-case");
-  test_session_archive_extensions_can_be_extended(root / "archive-extensions-case");
+  test_one_selection_is_adopted_where_the_player_keeps_it(root / "adopt-case");
+  test_one_selection_accepts_a_directory_and_replaces(root / "adopt-tree-case");
   test_partial_selection_names_what_is_missing(root / "partial-case");
   test_stale_staging_is_pruned(root / "stale-staging-case");
   test_screen_renders_geometry(root / "render-case");
