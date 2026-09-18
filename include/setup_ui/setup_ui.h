@@ -69,6 +69,10 @@ struct Config {
   std::vector<FileSpec> files;
   bool accepts_archive = false; // one bounded ZIP standing in for a named set
   Placement placement = Placement::Stage;
+  // The button that asks the consumer's picker to open. A port needing one
+  // selection says so ("Choose your game files"); the plural default suits a
+  // named set.
+  std::string browse_label = "Choose files";
   // Shown when the validator accepts the set, just before the port starts.
   std::string accepted_message = "Files accepted.";
 };
