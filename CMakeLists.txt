@@ -13,23 +13,33 @@ if(NOT TARGET SDL3::SDL3 AND NOT TARGET SDL3::SDL3-static)
 endif()
 
 # RmlUi resolves the way the ports resolve their shared checkouts: an explicit
-# SETUP_UI_RMLUI_DIR, or a sibling checkout next to this repository.
-set(SETUP_UI_RMLUI_DEFAULT "")
-foreach(candidate "${CMAKE_CURRENT_SOURCE_DIR}/../RmlUi" "${CMAKE_CURRENT_SOURCE_DIR}/../../RmlUi")
-    if(IS_DIRECTORY "${candidate}")
-        set(SETUP_UI_RMLUI_DEFAULT "${candidate}")
-        break()
+# SETUP_UI_RMLUI_DIR, or a sibling checkout next to this repository. When an
+# outer consumer (a title that already links RmlUi for its own UI, such as
+# lf2's in-game settings screen) added `RmlUi::RmlUi` before pulling this
+# module in as a subdirectory, that target is reused as-is instead of adding
+# RmlUi's CMake a second time — a second add_subdirectory of the same RmlUi
+# tree redefines its targets and CMake fails with "add_library cannot create
+# target ... because another target with the same name already exists". The
+# outer consumer's own RmlUi build options (debugger, SVG plugin, etc.) remain
+# authoritative in that case, and SETUP_UI_RMLUI_DIR is simply unused.
+if(NOT TARGET RmlUi::RmlUi)
+    set(SETUP_UI_RMLUI_DEFAULT "")
+    foreach(candidate "${CMAKE_CURRENT_SOURCE_DIR}/../RmlUi" "${CMAKE_CURRENT_SOURCE_DIR}/../../RmlUi")
+        if(IS_DIRECTORY "${candidate}")
+            set(SETUP_UI_RMLUI_DEFAULT "${candidate}")
+            break()
+        endif()
+    endforeach()
+    if(DEFINED ENV{SETUP_UI_RMLUI_DIR} AND NOT "$ENV{SETUP_UI_RMLUI_DIR}" STREQUAL "")
+        set(SETUP_UI_RMLUI_DEFAULT "$ENV{SETUP_UI_RMLUI_DIR}")
     endif()
-endforeach()
-if(DEFINED ENV{SETUP_UI_RMLUI_DIR} AND NOT "$ENV{SETUP_UI_RMLUI_DIR}" STREQUAL "")
-    set(SETUP_UI_RMLUI_DEFAULT "$ENV{SETUP_UI_RMLUI_DIR}")
-endif()
-set(SETUP_UI_RMLUI_DIR "${SETUP_UI_RMLUI_DEFAULT}" CACHE PATH "Path to the RmlUi checkout")
-get_filename_component(SETUP_UI_RMLUI_DIR "${SETUP_UI_RMLUI_DIR}" ABSOLUTE)
-if(NOT IS_DIRECTORY "${SETUP_UI_RMLUI_DIR}")
-    message(FATAL_ERROR
-        "setup_ui requires an RmlUi checkout at ${SETUP_UI_RMLUI_DIR}; "
-        "provide -DSETUP_UI_RMLUI_DIR=<checkout>")
+    set(SETUP_UI_RMLUI_DIR "${SETUP_UI_RMLUI_DEFAULT}" CACHE PATH "Path to the RmlUi checkout")
+    get_filename_component(SETUP_UI_RMLUI_DIR "${SETUP_UI_RMLUI_DIR}" ABSOLUTE)
+    if(NOT IS_DIRECTORY "${SETUP_UI_RMLUI_DIR}")
+        message(FATAL_ERROR
+            "setup_ui requires an RmlUi checkout at ${SETUP_UI_RMLUI_DIR}; "
+            "provide -DSETUP_UI_RMLUI_DIR=<checkout>")
+    endif()
 endif()
 # RmlUi renders text through Freetype::Freetype, so every product needs that
 # target from somewhere. Three sources, in order of what the host provides:
@@ -95,16 +105,18 @@ if(NOT TARGET Freetype::Freetype)
     add_library(Freetype::Freetype ALIAS freetype-interface)
 endif()
 
-set(RMLUI_SAMPLES OFF CACHE BOOL "" FORCE)
-# RmlUi defaults to shared libraries and always builds its debugger; a port
-# links it statically and has no debugger UI, so both are turned off here
-# (these settings apply to this subdirectory tree only).
-set(BUILD_SHARED_LIBS OFF)
-set(RMLUI_DEBUGGER OFF CACHE BOOL "" FORCE)
-set(RMLUI_FONT_ENGINE "freetype" CACHE STRING "" FORCE)
-set(RMLUI_PRECOMPILED_HEADERS OFF CACHE BOOL "" FORCE)
-set(RMLUI_COMPILER_OPTIONS OFF CACHE BOOL "" FORCE)
-add_subdirectory("${SETUP_UI_RMLUI_DIR}" "${CMAKE_BINARY_DIR}/rmlui" EXCLUDE_FROM_ALL)
+if(NOT TARGET RmlUi::RmlUi)
+    set(RMLUI_SAMPLES OFF CACHE BOOL "" FORCE)
+    # RmlUi defaults to shared libraries and always builds its debugger; a port
+    # links it statically and has no debugger UI, so both are turned off here
+    # (these settings apply to this subdirectory tree only).
+    set(BUILD_SHARED_LIBS OFF)
+    set(RMLUI_DEBUGGER OFF CACHE BOOL "" FORCE)
+    set(RMLUI_FONT_ENGINE "freetype" CACHE STRING "" FORCE)
+    set(RMLUI_PRECOMPILED_HEADERS OFF CACHE BOOL "" FORCE)
+    set(RMLUI_COMPILER_OPTIONS OFF CACHE BOOL "" FORCE)
+    add_subdirectory("${SETUP_UI_RMLUI_DIR}" "${CMAKE_BINARY_DIR}/rmlui" EXCLUDE_FROM_ALL)
+endif()
 
 set(SETUP_UI_TITLE "Setup" CACHE STRING "Default setup screen title")
 set(SETUP_UI_MESSAGE "Choose your files to continue." CACHE STRING "Default setup message")

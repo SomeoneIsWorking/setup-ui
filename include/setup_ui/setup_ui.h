@@ -47,7 +47,14 @@ struct Config {
   std::string hint;    // small print under the choose button
   std::string footer;  // small print at the bottom
   std::vector<FileSpec> files;
-  bool accepts_archive = false; // one bounded ZIP containing the whole set
+  bool accepts_archive = false; // one bounded archive standing in for the whole set
+  // Extensions (case-insensitive, with the leading dot) accepted as the single
+  // substitute when `accepts_archive` is set. Defaults to ZIP only, which is
+  // every existing consumer's behavior; a consumer that also accepts, say, an
+  // original installer executable adds ".exe" here. The session never
+  // inspects the bytes — extraction and identity remain the consumer's
+  // Validator.
+  std::vector<std::string> archive_extensions = {".zip"};
 };
 
 // One required row as the screen shows it.
