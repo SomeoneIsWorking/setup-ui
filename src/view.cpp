@@ -212,6 +212,24 @@ std::string escape(const std::string &text) {
 
 // The first usable system UI font. A consumer that ships its own passes an
 // explicit path instead; failing to find any font is reported, never ignored.
+// Reads a whole file. A font face is registered from its bytes, so a partial
+// read has to be a refusal and not a shorter face.
+bool read_file_bytes(const std::string &path, std::vector<Rml::byte> &bytes) {
+  bytes.clear();
+  std::ifstream stream(path, std::ios::binary | std::ios::ate);
+  if (!stream) {
+    return false;
+  }
+  const std::streamoff size = stream.tellg();
+  if (size <= 0) {
+    return false;
+  }
+  bytes.resize(static_cast<std::size_t>(size));
+  stream.seekg(0);
+  stream.read(reinterpret_cast<char *>(bytes.data()), size);
+  return static_cast<std::streamoff>(stream.gcount()) == size;
+}
+
 std::string default_font_path() {
   static constexpr const char *kCandidates[] = {
       "/system/fonts/Roboto-Regular.ttf",
@@ -273,6 +291,9 @@ struct View::Impl {
   Rml::Element *progress = nullptr;
   Rml::Element *progress_fill = nullptr;
   std::vector<Request> queue;
+  // The face is registered from these bytes, which RmlUi may read for as long
+  // as the face is loaded, so they outlive it here.
+  std::vector<Rml::byte> font_data;
   std::unique_ptr<ButtonListener> browse_listener;
   std::unique_ptr<ButtonListener> start_listener;
   std::unique_ptr<ButtonListener> cancel_listener;
@@ -534,9 +555,18 @@ bool View::open() {
     return false;
   }
   // The stylesheet names the family explicitly so the screen does not depend
-  // on whatever family name a host's font file happens to carry.
-  if (!Rml::LoadFontFace(font, "setup", Rml::Style::FontStyle::Normal,
-                         Rml::Style::FontWeight::Normal, true)) {
+  // on whatever family name a host's font file happens to carry. The face is
+  // registered from bytes rather than from the path: naming a family for a
+  // path is a newer RmlUi overload than some consumers pin, and every version
+  // a consumer builds against has this one.
+  if (!read_file_bytes(font, impl_->font_data)) {
+    impl_->error = "the UI font could not be read: " + font;
+    close();
+    return false;
+  }
+  if (!Rml::LoadFontFace(Rml::Span<const Rml::byte>(impl_->font_data.data(), impl_->font_data.size()),
+                         "setup", Rml::Style::FontStyle::Normal, Rml::Style::FontWeight::Normal,
+                         true)) {
     impl_->error = "the UI font could not be loaded: " + font;
     close();
     return false;
