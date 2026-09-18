@@ -56,15 +56,29 @@ while (view.running()) {
 }
 ```
 
-`Config.accepts_archive` lets one bounded archive stand in for the whole set;
-`Config.archive_extensions` (default `{".zip"}`) names which extensions count
-as that substitute, case-insensitively — a consumer that also accepts an
-original installer executable sets it to `{".zip", ".exe"}`. The session only
-recognizes the extension and stages the bytes under a name that keeps the
-source's own extension; it never inspects archive contents, so extraction and
-identity remain the consumer's Validator. A partial selection is not a
-failure: the session reports
-`Still needed: <names>` so the screen tells the player what is missing, and
+A config comes in one of two shapes.
+
+**A named set.** `Config.files` lists the exact file names the port needs, and
+`Config.accepts_archive` lets one bounded ZIP stand in for the whole set. A
+partial selection is not a failure: the session reports
+`Still needed: <names>` so the screen tells the player what is missing.
+Benefactor's three disk images are this shape.
+
+**One selection the port judges itself.** `Config.files` holds a single
+`FileSpec` with an empty `name`, and whatever one path the player chooses
+satisfies it — a ROM, a disc image, an original installer, an archive, or an
+existing install directory. The session never guesses from the name; the
+Validator decides. Choosing again replaces the previous choice. LF2's single
+Little Fighter 2 install is this shape.
+
+`Config.placement` says what the Validator is handed. `Placement::Stage` (the
+default) copies the chosen bytes into a private directory, so the port holds
+its own complete set. `Placement::Adopt` hands over the player's own location
+unchanged, which is what a port needs when the selection is a directory or a
+file whose siblings are part of the install — copying that file alone would
+lose them. Nothing is copied under `Adopt`, so `SessionOptions` and its byte
+bound do not apply and the consumer owns every bound on what it reads.
+
 `Session::discard_stale_staging` prunes the staging directory a killed process
 left behind (Android force-stop, a crash), which its destructor never removed.
 

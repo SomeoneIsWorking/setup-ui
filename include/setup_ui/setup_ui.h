@@ -36,9 +36,29 @@ namespace setup_ui {
 
 // One required input, in the order the player should provide them.
 struct FileSpec {
-  std::string key;   // stable identifier used by the consumer ("disk1")
-  std::string name;  // exact expected file name ("Disk.1")
+  std::string key; // stable identifier used by the consumer ("disk1")
+  // Exact expected file name ("Disk.1"). An empty name makes this the port's
+  // single requirement, satisfied by whichever one thing the player selects —
+  // a ROM, a disc image, an original installer, an archive, or an existing
+  // install directory — with the consumer's Validator deciding whether it is
+  // the right one. A config that uses an empty name has exactly one FileSpec,
+  // because there is nothing to tell two such selections apart by.
+  std::string name;
   std::string label; // human-readable row label ("Game disc 1")
+};
+
+// Where a chosen selection is handed to the Validator.
+enum class Placement : std::uint8_t {
+  // Copy the bytes into this session's private staging directory first, so
+  // the port holds a private, complete set however the player's copy was
+  // reached. Regular files only, bounded by SessionOptions::max_file_bytes.
+  Stage,
+  // Hand the Validator the path the player chose, unchanged. A port whose
+  // selection is a directory, or a file whose siblings are part of the
+  // install, needs those surroundings: copying the chosen file on its own
+  // would lose them. Nothing is copied and no byte bound is applied, so the
+  // consumer owns every bound on what it reads from that location.
+  Adopt,
 };
 
 struct Config {
@@ -47,14 +67,10 @@ struct Config {
   std::string hint;    // small print under the choose button
   std::string footer;  // small print at the bottom
   std::vector<FileSpec> files;
-  bool accepts_archive = false; // one bounded archive standing in for the whole set
-  // Extensions (case-insensitive, with the leading dot) accepted as the single
-  // substitute when `accepts_archive` is set. Defaults to ZIP only, which is
-  // every existing consumer's behavior; a consumer that also accepts, say, an
-  // original installer executable adds ".exe" here. The session never
-  // inspects the bytes — extraction and identity remain the consumer's
-  // Validator.
-  std::vector<std::string> archive_extensions = {".zip"};
+  bool accepts_archive = false; // one bounded ZIP standing in for a named set
+  Placement placement = Placement::Stage;
+  // Shown when the validator accepts the set, just before the port starts.
+  std::string accepted_message = "Files accepted.";
 };
 
 // One required row as the screen shows it.
@@ -71,19 +87,23 @@ enum class Status : std::uint8_t {
   Accepted,   // the validator accepted the set; the consumer may start
 };
 
-// The consumer's policy over a complete staged set. Called on the same thread
-// that drives the View. Returns an empty string to accept, or a
-// human-readable reason to reject. `files` are staged, readable paths.
+// The consumer's policy over a complete selected set. Called on the same
+// thread that drives the View. Returns an empty string to accept, or a
+// human-readable reason to reject. Each `path` is readable: under
+// Placement::Stage it is this session's private copy, and under
+// Placement::Adopt it is the location the player chose, which may be a
+// directory.
 struct StagedFile {
   FileSpec spec;
   std::filesystem::path path;
-  std::uintmax_t size = 0;
+  std::uintmax_t size = 0; // bytes; zero for an adopted directory
   bool is_archive = false;
 };
 using Validator = std::function<std::string(const std::vector<StagedFile> &)>;
 
 // Where staged uploads live. The consumer supplies a private directory; the
-// session creates and cleans one child per attempt.
+// session creates and cleans one child per attempt. Both are unused under
+// Placement::Adopt, which copies nothing.
 struct SessionOptions {
   std::filesystem::path staging_root;
   std::size_t max_file_bytes = 64ULL * 1024ULL * 1024ULL;
@@ -97,7 +117,9 @@ public:
   Session &operator=(const Session &) = delete;
 
   // Adds every selected file that matches a requirement by exact name, plus
-  // one archive when the config allows it. Copies the bytes into staging.
+  // one archive when the config allows it; a config whose single FileSpec has
+  // an empty name instead takes whatever one path was selected. Copies the
+  // bytes into staging unless the config adopts the chosen location.
   // Returns the count added; `error` names the first rejection.
   std::size_t add_selected(const std::vector<std::filesystem::path> &paths, std::string &error);
 
