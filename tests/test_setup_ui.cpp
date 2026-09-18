@@ -202,6 +202,56 @@ void test_session_archive_replaces_the_set(const std::filesystem::path &root) {
   CHECK(archive_seen);
 }
 
+// A consumer such as a game port that also accepts the original installer
+// executable configures a second archive extension; the default (ZIP-only)
+// behavior above must be unaffected by that capability existing.
+void test_session_archive_extensions_can_be_extended(const std::filesystem::path &root) {
+  std::filesystem::create_directories(root);
+  setup_ui::Config config = test_config();
+  config.archive_extensions = {".zip", ".exe"};
+
+  // A .exe selection is accepted as the substitute, and the staged file keeps
+  // the .exe extension rather than being forced to .zip.
+  {
+    const auto installer = root / "installer" / "LF2_v2.0a.exe";
+    std::filesystem::create_directories(installer.parent_path());
+    write_file(installer, std::string(4096, 'i'));
+    setup_ui::SessionOptions options;
+    options.staging_root = root / "exe-staging";
+    bool saw_exe = false;
+    setup_ui::Session session(config, options, [&](const std::vector<setup_ui::StagedFile> &files) {
+      saw_exe = files.size() == 1 && files[0].is_archive &&
+               files[0].path.extension() == ".exe";
+      return std::string{};
+    });
+    std::string error;
+    CHECK(session.add_selected({installer}, error) == 1);
+    CHECK(session.status() == setup_ui::Status::Ready);
+    session.validate_if_ready();
+    CHECK(session.status() == setup_ui::Status::Accepted);
+    CHECK(saw_exe);
+  }
+
+  // A plain .zip still works when both extensions are configured.
+  {
+    const auto archive = root / "still-zip.zip";
+    write_file(archive, std::string(2048, 'z'));
+    setup_ui::SessionOptions options;
+    options.staging_root = root / "zip-staging";
+    bool saw_zip = false;
+    setup_ui::Session session(config, options, [&](const std::vector<setup_ui::StagedFile> &files) {
+      saw_zip = files.size() == 1 && files[0].is_archive &&
+               files[0].path.extension() == ".zip";
+      return std::string{};
+    });
+    std::string error;
+    CHECK(session.add_selected({archive}, error) == 1);
+    session.validate_if_ready();
+    CHECK(session.status() == setup_ui::Status::Accepted);
+    CHECK(saw_zip);
+  }
+}
+
 void test_screen_renders_geometry(const std::filesystem::path &root) {
   std::filesystem::create_directories(root);
   setup_ui::SessionOptions options;
@@ -309,6 +359,7 @@ int main() {
   test_session_staging_and_validation(root / "staging-case");
   test_session_rejection_keeps_rows(root / "rejection-case");
   test_session_archive_replaces_the_set(root / "archive-case");
+  test_session_archive_extensions_can_be_extended(root / "archive-extensions-case");
   test_partial_selection_names_what_is_missing(root / "partial-case");
   test_stale_staging_is_pruned(root / "stale-staging-case");
   test_screen_renders_geometry(root / "render-case");

@@ -56,8 +56,14 @@ while (view.running()) {
 }
 ```
 
-`Config.accepts_archive` lets one bounded ZIP stand in for the whole set. A
-partial selection is not a failure: the session reports
+`Config.accepts_archive` lets one bounded archive stand in for the whole set;
+`Config.archive_extensions` (default `{".zip"}`) names which extensions count
+as that substitute, case-insensitively — a consumer that also accepts an
+original installer executable sets it to `{".zip", ".exe"}`. The session only
+recognizes the extension and stages the bytes under a name that keeps the
+source's own extension; it never inspects archive contents, so extraction and
+identity remain the consumer's Validator. A partial selection is not a
+failure: the session reports
 `Still needed: <names>` so the screen tells the player what is missing, and
 `Session::discard_stale_staging` prunes the staging directory a killed process
 left behind (Android force-stop, a crash), which its destructor never removed.

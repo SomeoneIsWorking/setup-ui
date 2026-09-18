@@ -7,6 +7,7 @@
 #include "setup_ui/setup_ui.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <fstream>
 #include <random>
@@ -26,6 +27,30 @@ std::string random_suffix() {
     suffix.push_back(kAlphabet[pick(engine)]);
   }
   return suffix;
+}
+
+std::string to_lower(const std::string &value) {
+  std::string lowered = value;
+  std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                 [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+  return lowered;
+}
+
+// True when `name` ends with one of `extensions` (case-insensitive). Used only
+// to recognize the single-file archive substitute; it never inspects bytes.
+bool matches_archive_extension(const std::string &name, const std::vector<std::string> &extensions) {
+  const std::string lowered_name = to_lower(name);
+  for (const std::string &extension : extensions) {
+    const std::string lowered_extension = to_lower(extension);
+    if (lowered_extension.empty() || lowered_extension.size() >= lowered_name.size()) {
+      continue;
+    }
+    if (lowered_name.compare(lowered_name.size() - lowered_extension.size(), lowered_extension.size(),
+                            lowered_extension) == 0) {
+      return true;
+    }
+  }
+  return false;
 }
 
 } // namespace
@@ -84,7 +109,12 @@ struct Session::Impl {
       error = "the selected file is larger than this setup accepts";
       return false;
     }
-    const std::string leaf = is_archive ? ("archive-" + random_suffix() + ".zip") : spec.name;
+    // The staged leaf keeps the source's own extension for the archive
+    // substitute (a downstream consumer, such as a game port's installer
+    // dispatch, decides what to do by extension), and the exact required name
+    // for an ordinary requirement.
+    const std::string leaf =
+        is_archive ? ("archive-" + random_suffix() + source.extension().string()) : spec.name;
     const std::filesystem::path target = std::filesystem::path(staging) / leaf;
     std::filesystem::copy_file(source, target, std::filesystem::copy_options::overwrite_existing,
                               status_code);
@@ -180,7 +210,7 @@ std::size_t Session::add_selected(const std::vector<std::filesystem::path> &path
   // requirement by exact name.
   if (impl_->config.accepts_archive && paths.size() == 1) {
     const std::string name = paths.front().filename().string();
-    const bool archive = name.size() > 4 && name.compare(name.size() - 4, 4, ".zip") == 0;
+    const bool archive = matches_archive_extension(name, impl_->config.archive_extensions);
     if (archive) {
       reset();
       if (!impl_->ensure_staging()) {
