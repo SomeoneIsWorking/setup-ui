@@ -546,6 +546,9 @@ bool View::open() {
       close();
       return false;
     }
+    if (impl_->options.icon != nullptr && !SDL_SetWindowIcon(impl_->window, impl_->options.icon)) {
+      SDL_Log("setup_ui: the window icon was not applied: %s", SDL_GetError());
+    }
     impl_->renderer = SDL_CreateRenderer(impl_->window, nullptr);
     if (impl_->renderer == nullptr) {
       impl_->renderer = SDL_CreateRenderer(impl_->window, "software");

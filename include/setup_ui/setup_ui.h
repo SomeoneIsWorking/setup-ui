@@ -32,6 +32,8 @@
 #include <string>
 #include <vector>
 
+struct SDL_Surface;
+
 namespace setup_ui {
 
 // One required input, in the order the player should provide them.
@@ -174,6 +176,9 @@ struct ViewOptions {
   // pins it, which is how a phone-sized screen is reproduced on a desktop for
   // verification.
   float density_ratio = 0.0F;
+  // The window's icon, owned by the consumer and kept alive while the view is
+  // open. Null leaves the platform default.
+  SDL_Surface *icon = nullptr;
   // Render to an offscreen surface instead of a window. Used for exact-size
   // verification (a phone viewport larger than the build host's display) and
   // for hosts that present elsewhere.
