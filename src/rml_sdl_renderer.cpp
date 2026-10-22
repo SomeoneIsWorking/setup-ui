@@ -24,11 +24,6 @@ SDL_FColor to_sdl_color(const Rml::ColourbPremultiplied &colour) {
 
 } // namespace
 
-struct SdlRmlRenderer::Geometry {
-  std::vector<SDL_Vertex> vertices;
-  std::vector<int> indices;
-};
-
 SdlRmlRenderer::SdlRmlRenderer(SDL_Renderer *renderer) : renderer_(renderer) {
 }
 

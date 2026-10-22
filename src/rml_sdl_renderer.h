@@ -12,13 +12,11 @@
 #pragma once
 
 #include <RmlUi/Core/RenderInterface.h>
+#include <SDL3/SDL_render.h>
 
 #include <cstdint>
 #include <unordered_map>
 #include <vector>
-
-struct SDL_Renderer;
-struct SDL_Texture;
 
 namespace setup_ui {
 
@@ -59,7 +57,12 @@ public:
   }
 
 private:
-  struct Geometry;
+  // Complete here: an unordered_map of an incomplete type is rejected by
+  // libstdc++ 11.
+  struct Geometry {
+    std::vector<SDL_Vertex> vertices;
+    std::vector<int> indices;
+  };
 
   SDL_Renderer *renderer_;
   // Handles are plain integers owned by this table: RmlUi's handle type is an
