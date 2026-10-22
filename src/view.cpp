@@ -418,6 +418,12 @@ struct View::Impl {
     context->SetDimensions(Rml::Vector2i{pixel_width, pixel_height});
   }
 
+  // SDL reports the mouse in window units; the context is in pixels.
+  void mouse_move(float x, float y) {
+    const float density = window != nullptr ? SDL_GetWindowPixelDensity(window) : 1.0F;
+    context->ProcessMouseMove(static_cast<int>(x * density), static_cast<int>(y * density), 0);
+  }
+
   void handle_event(const SDL_Event &event) {
     switch (event.type) {
     case SDL_EVENT_QUIT:
@@ -438,14 +444,12 @@ struct View::Impl {
       break;
     case SDL_EVENT_MOUSE_MOTION:
       if (context != nullptr) {
-        context->ProcessMouseMove(static_cast<int>(event.motion.x),
-                                  static_cast<int>(event.motion.y), 0);
+        mouse_move(event.motion.x, event.motion.y);
       }
       break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
       if (context != nullptr) {
-        context->ProcessMouseMove(static_cast<int>(event.button.x),
-                                  static_cast<int>(event.button.y), 0);
+        mouse_move(event.button.x, event.button.y);
         context->ProcessMouseButtonDown(SDL_BUTTON_LEFT - 1, 0);
       }
       break;
@@ -522,6 +526,8 @@ bool View::open() {
       return false;
     }
   } else {
+    // Full pixel density: without it a 2.5x desktop gets a 960x540-pixel
+    // buffer, a 384x216 dp layout, stretched by the compositor.
     // Never larger than the display: an 800x600 screen otherwise clips the
     // screen's left edge off where no window manager moves it back.
     int window_width = width;
@@ -533,7 +539,8 @@ bool View::open() {
     }
     impl_->window =
         SDL_CreateWindow(impl_->options.window_title.c_str(), window_width, window_height,
-                         impl_->options.resizable ? SDL_WINDOW_RESIZABLE : 0);
+                         SDL_WINDOW_HIGH_PIXEL_DENSITY |
+                             (impl_->options.resizable ? SDL_WINDOW_RESIZABLE : 0));
     if (impl_->window == nullptr) {
       impl_->error = std::string{"the setup window could not be created: "} + SDL_GetError();
       close();
