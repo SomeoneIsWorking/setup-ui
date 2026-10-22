@@ -320,8 +320,9 @@ void test_screen_renders_geometry(const std::filesystem::path &root) {
   int width = 0;
   int height = 0;
   CHECK(view.capture(pixels, width, height));
-  CHECK(width == 640);
-  CHECK(height == 360);
+  // Pixels, not window units: a 2x display captures 1280x720.
+  CHECK(width >= 640);
+  CHECK(width * 360 == height * 640);
   if (!pixels.empty()) {
     std::size_t distinct = 0;
     const std::uint32_t first = pixels.front();

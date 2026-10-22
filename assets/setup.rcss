@@ -16,7 +16,13 @@ div, p, h1 {
 	display: block;
 }
 
+/* One centred column: a wide window gets margins, not a stretched card with
+   an empty right half. */
 body {
+	display: flex;
+	flex-direction: column;
+	justify-content: center;
+	align-items: center;
 	font-family: setup;
 	font-size: 19dp;
 	color: #e8ecf4;
@@ -27,7 +33,8 @@ body {
 
 #screen {
 	display: block;
-	height: 100%;
+	width: 100%;
+	max-width: 640dp;
 	padding: 3% 4%;
 }
 
@@ -96,7 +103,6 @@ body {
 
 #chooser {
 	display: block;
-	max-width: 420dp;
 	margin-top: 20dp;
 }
 
@@ -154,7 +160,6 @@ body {
 
 #actions {
 	display: block;
-	max-width: 420dp;
 	margin-top: 6dp;
 }
 
@@ -235,7 +240,6 @@ body {
 	}
 
 	#chooser {
-		width: 300dp;
 		margin-top: 10dp;
 	}
 
@@ -256,7 +260,6 @@ body {
 	}
 
 	#actions {
-		width: 300dp;
 		margin-top: 4dp;
 	}
 
@@ -307,11 +310,6 @@ body {
 
 	.row .label {
 		font-size: 15dp;
-	}
-
-	#chooser,
-	#actions {
-		max-width: none;
 	}
 
 	#browse,
