@@ -523,8 +523,18 @@ bool View::open() {
       return false;
     }
   } else {
-    impl_->window = SDL_CreateWindow(impl_->options.window_title.c_str(), width, height,
-                                     impl_->options.resizable ? SDL_WINDOW_RESIZABLE : 0);
+    // Never larger than the display: an 800x600 screen otherwise clips the
+    // screen's left edge off where no window manager moves it back.
+    int window_width = width;
+    int window_height = height;
+    SDL_Rect usable;
+    if (SDL_GetDisplayUsableBounds(SDL_GetPrimaryDisplay(), &usable)) {
+      window_width = std::min(window_width, usable.w);
+      window_height = std::min(window_height, usable.h);
+    }
+    impl_->window =
+        SDL_CreateWindow(impl_->options.window_title.c_str(), window_width, window_height,
+                         impl_->options.resizable ? SDL_WINDOW_RESIZABLE : 0);
     if (impl_->window == nullptr) {
       impl_->error = std::string{"the setup window could not be created: "} + SDL_GetError();
       close();
