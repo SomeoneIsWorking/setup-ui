@@ -338,7 +338,6 @@ struct View::Impl {
       }
       Rml::ElementPtr mark = document->CreateElement("span");
       mark->SetClass("mark", true);
-      mark->SetInnerRML(entry.provided ? "&#10003;" : "");
       row_element->AppendChild(std::move(mark));
       Rml::ElementPtr label = document->CreateElement("span");
       label->SetClass("label", true);
