@@ -136,3 +136,5 @@ clang-tidy against the real compile database, and the CTest suite (staging and
 validation, archive replacement, partial-selection wording, stale staging,
 embedded-asset identity, and the phone-viewport density check). No game files
 are build inputs.
+
+Built with AI assistance (Claude and other LLMs).
