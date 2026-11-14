@@ -68,7 +68,7 @@ enum class Placement : std::uint8_t {
 struct Config {
   std::string title;   // screen heading and window title
   std::string message; // one line under the heading
-  std::string hint;    // small print under the choose button
+  std::string hint;    // small print under the choose button; may hold several lines
   std::string footer;  // small print at the bottom
   std::vector<FileSpec> files;
   bool accepts_archive = false; // one bounded ZIP standing in for a named set

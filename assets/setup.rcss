@@ -125,6 +125,7 @@ body {
 	color: #8b93a7;
 	font-size: 16dp;
 	margin-top: 10dp;
+	word-break: break-word;
 }
 
 #progress {

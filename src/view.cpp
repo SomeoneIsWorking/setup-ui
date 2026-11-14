@@ -210,6 +210,19 @@ std::string escape(const std::string &text) {
   return escaped;
 }
 
+// Escaped text of several lines: markup folds a bare newline.
+std::string lines(const std::string &text) {
+  std::string shown;
+  for (const char character : escape(text)) {
+    if (character == '\n') {
+      shown += "<br/>";
+    } else {
+      shown.push_back(character);
+    }
+  }
+  return shown;
+}
+
 // The first usable system UI font. A consumer that ships its own passes an
 // explicit path instead; failing to find any font is reported, never ignored.
 // Reads a whole file. A font face is registered from its bytes, so a partial
@@ -317,7 +330,7 @@ struct View::Impl {
       message->SetInnerRML(escape(config.message));
     }
     if (hint != nullptr) {
-      hint->SetInnerRML(escape(config.hint));
+      hint->SetInnerRML(lines(config.hint));
     }
     if (footer != nullptr) {
       footer->SetInnerRML(escape(config.footer));
@@ -374,16 +387,7 @@ struct View::Impl {
     if (status != nullptr) {
       status->SetClass("rejected", session->status() == Status::Rejected);
       status->SetClass("accepted", session->status() == Status::Accepted);
-      // A consumer's reason may have several lines; markup folds a bare newline.
-      std::string shown;
-      for (const char character : escape(session->message())) {
-        if (character == '\n') {
-          shown += "<br/>";
-        } else {
-          shown.push_back(character);
-        }
-      }
-      status->SetInnerRML(shown);
+      status->SetInnerRML(lines(session->message()));
     }
     if (progress_fill != nullptr) {
       std::ostringstream width;
