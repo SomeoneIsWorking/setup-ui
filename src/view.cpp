@@ -301,6 +301,10 @@ struct View::Impl {
   std::unique_ptr<ButtonListener> again_listener;
   std::string error;
   bool owns_sdl_video = false;
+  bool owns_gamepads = false;
+  // Gamepads this view opened; a hosted view reads the ones its consumer opened.
+  std::vector<SDL_Gamepad *> gamepads;
+  bool hosted = false;
   bool running = false;
   bool rml_initialised = false;
 
@@ -320,6 +324,9 @@ struct View::Impl {
     }
     if (browse != nullptr) {
       browse->SetInnerRML(escape(config.browse_label));
+    }
+    if (again != nullptr) {
+      again->SetInnerRML(escape(config.again_label));
     }
   }
 
@@ -367,8 +374,16 @@ struct View::Impl {
     if (status != nullptr) {
       status->SetClass("rejected", session->status() == Status::Rejected);
       status->SetClass("accepted", session->status() == Status::Accepted);
-      const std::string shown = session->message();
-      status->SetInnerRML(escape(shown));
+      // A consumer's reason may have several lines; markup folds a bare newline.
+      std::string shown;
+      for (const char character : escape(session->message())) {
+        if (character == '\n') {
+          shown += "<br/>";
+        } else {
+          shown.push_back(character);
+        }
+      }
+      status->SetInnerRML(shown);
     }
     if (progress_fill != nullptr) {
       std::ostringstream width;
@@ -424,6 +439,15 @@ struct View::Impl {
     context->ProcessMouseMove(static_cast<int>(x * density), static_cast<int>(y * density), 0);
   }
 
+  // What Return, Space and a gamepad's confirm button ask for.
+  void confirm() {
+    if (session->status() == Status::Ready || session->status() == Status::Accepted) {
+      queue.push_back(Request{RequestKind::Start});
+    } else {
+      queue.push_back(Request{RequestKind::Browse});
+    }
+  }
+
   void handle_event(const SDL_Event &event) {
     switch (event.type) {
     case SDL_EVENT_QUIT:
@@ -431,15 +455,29 @@ struct View::Impl {
       queue.push_back(Request{RequestKind::Cancel});
       break;
     case SDL_EVENT_KEY_DOWN:
+      if (event.key.repeat) {
+        break;
+      }
       if (event.key.key == SDLK_ESCAPE) {
         queue.push_back(Request{RequestKind::Cancel});
       } else if (event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER ||
                  event.key.key == SDLK_SPACE) {
-        if (session->status() == Status::Ready || session->status() == Status::Accepted) {
-          queue.push_back(Request{RequestKind::Start});
-        } else {
-          queue.push_back(Request{RequestKind::Browse});
+        confirm();
+      }
+      break;
+    case SDL_EVENT_GAMEPAD_ADDED:
+      if (owns_gamepads) {
+        if (SDL_Gamepad *gamepad = SDL_OpenGamepad(event.gdevice.which)) {
+          gamepads.push_back(gamepad);
         }
+      }
+      break;
+    case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+      if (event.gbutton.button == SDL_GAMEPAD_BUTTON_SOUTH ||
+          event.gbutton.button == SDL_GAMEPAD_BUTTON_START) {
+        confirm();
+      } else if (event.gbutton.button == SDL_GAMEPAD_BUTTON_EAST) {
+        queue.push_back(Request{RequestKind::Cancel});
       }
       break;
     case SDL_EVENT_MOUSE_MOTION:
@@ -508,7 +546,16 @@ bool View::open() {
 
   const int width = std::max(320, impl_->options.width);
   const int height = std::max(240, impl_->options.height);
-  if (impl_->options.offscreen) {
+  impl_->hosted = impl_->options.host_renderer != nullptr;
+  if (impl_->hosted) {
+    impl_->renderer = impl_->options.host_renderer;
+    impl_->window = SDL_GetRenderWindow(impl_->renderer);
+    if (impl_->window == nullptr) {
+      impl_->error = std::string{"the host renderer has no window: "} + SDL_GetError();
+      close();
+      return false;
+    }
+  } else if (impl_->options.offscreen) {
     // An offscreen target: same renderer interface, arbitrary size, and no
     // dependency on a display large enough to hold it.
     impl_->surface = SDL_CreateSurface(width, height, SDL_PIXELFORMAT_ARGB8888);
@@ -559,7 +606,12 @@ bool View::open() {
       return false;
     }
   }
-  SDL_SetDefaultTextureScaleMode(impl_->renderer, SDL_SCALEMODE_NEAREST);
+  if (!impl_->hosted) {
+    SDL_SetDefaultTextureScaleMode(impl_->renderer, SDL_SCALEMODE_NEAREST);
+    // A pad is enough to answer the screen on a handheld. One that cannot be
+    // read leaves the keyboard and the pointer.
+    impl_->owns_gamepads = SDL_InitSubSystem(SDL_INIT_GAMEPAD);
+  }
 
   impl_->render_interface = std::make_unique<SdlRmlRenderer>(impl_->renderer);
   impl_->system_interface = std::make_unique<SetupSystemInterface>();
@@ -666,6 +718,18 @@ void View::close() {
   impl_->render_interface.reset();
   impl_->system_interface.reset();
   impl_->file_interface.reset();
+  for (SDL_Gamepad *gamepad : impl_->gamepads) {
+    SDL_CloseGamepad(gamepad);
+  }
+  impl_->gamepads.clear();
+  if (impl_->owns_gamepads) {
+    SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
+    impl_->owns_gamepads = false;
+  }
+  if (impl_->hosted) {
+    impl_->renderer = nullptr;
+    impl_->window = nullptr;
+  }
   if (impl_->renderer != nullptr) {
     SDL_DestroyRenderer(impl_->renderer);
     impl_->renderer = nullptr;
@@ -699,9 +763,11 @@ void View::frame() {
   if (!impl_->running) {
     return;
   }
-  SDL_Event event;
-  while (SDL_PollEvent(&event)) {
-    impl_->handle_event(event);
+  if (!impl_->hosted) {
+    SDL_Event event;
+    while (SDL_PollEvent(&event)) {
+      impl_->handle_event(event);
+    }
   }
   impl_->refresh();
   impl_->context->Update();
@@ -710,6 +776,12 @@ void View::frame() {
   impl_->context->Render();
   SDL_RenderPresent(impl_->renderer);
   impl_->session->validate_if_ready();
+}
+
+void View::handle_event(const SDL_Event &event) {
+  if (impl_->running) {
+    impl_->handle_event(event);
+  }
 }
 
 void View::finish() {

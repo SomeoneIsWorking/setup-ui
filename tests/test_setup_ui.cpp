@@ -1,5 +1,7 @@
 #include "setup_ui/setup_ui.h"
 
+#include <SDL3/SDL.h>
+
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -396,6 +398,37 @@ void test_screen_is_responsive_on_a_phone_viewport(const std::filesystem::path &
   view.close();
 }
 
+// A pad alone answers the screen: its south button asks what Return does, its
+// east button dismisses.
+void test_gamepad_buttons_raise_requests(const std::filesystem::path &root) {
+  std::filesystem::create_directories(root);
+  setup_ui::SessionOptions options;
+  options.staging_root = root / "pad-staging";
+  setup_ui::Session session(test_config(), options, [](const std::vector<setup_ui::StagedFile> &) {
+    return std::string{};
+  });
+  setup_ui::ViewOptions view_options;
+  view_options.offscreen = true;
+  setup_ui::View view(session, view_options);
+  if (!view.open()) {
+    std::fprintf(stderr, "SKIP gamepad buttons: %s\n", view.last_error().c_str());
+    return;
+  }
+  SDL_Event event{};
+  event.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+  event.gbutton.button = SDL_GAMEPAD_BUTTON_SOUTH;
+  view.handle_event(event);
+  event.gbutton.button = SDL_GAMEPAD_BUTTON_EAST;
+  view.handle_event(event);
+  const std::vector<setup_ui::Request> requests = view.poll();
+  CHECK(requests.size() == 2);
+  if (requests.size() == 2) {
+    CHECK(requests[0].kind == setup_ui::RequestKind::Browse);
+    CHECK(requests[1].kind == setup_ui::RequestKind::Cancel);
+  }
+  view.close();
+}
+
 } // namespace
 
 int main() {
@@ -409,6 +442,7 @@ int main() {
   test_stale_staging_is_pruned(root / "stale-staging-case");
   test_screen_renders_geometry(root / "render-case");
   test_screen_is_responsive_on_a_phone_viewport(root / "phone-case");
+  test_gamepad_buttons_raise_requests(root / "pad-case");
 
   std::error_code status;
   std::filesystem::remove_all(root, status);

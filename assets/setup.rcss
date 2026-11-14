@@ -142,12 +142,14 @@ body {
 	background-color: #5aa2ff;
 }
 
+/* A refusal may quote a path, which has no space to wrap at. */
 #status {
 	display: block;
 	margin-top: 16dp;
 	color: #8b93a7;
 	min-height: 26dp;
 	font-size: 18dp;
+	word-break: break-word;
 }
 
 #status.rejected {
@@ -284,7 +286,11 @@ body {
    the rows and controls take the full width and the type scale drops a step so
    nothing is clipped or needs horizontal scrolling. */
 @media (max-width: 640dp) {
+	/* The column is the viewport here, so its padding has to come out of its
+	   width: added to it, the column overhangs both edges and the text starts
+	   at the window's border. */
 	#screen {
+		box-sizing: border-box;
 		padding: 3% 3%;
 	}
 

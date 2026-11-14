@@ -82,6 +82,14 @@ bound do not apply and the consumer owns every bound on what it reads.
 `Session::discard_stale_staging` prunes the staging directory a killed process
 left behind (Android force-stop, a crash), which its destructor never removed.
 
+A port that already has a window open sets `ViewOptions::host_renderer`: the
+screen is drawn with that renderer in its window, the view creates and destroys
+neither, and the port's own event loop hands each event to
+`View::handle_event`. Either way a gamepad answers the screen: its south button
+or Start does what Return does (browse, or start once the set is ready) and its
+east button dismisses. A view with its own window opens the pads itself; a
+hosted one reads the pads its port opened.
+
 `ViewOptions` also carries `density_ratio` (0 = auto from the display scale) and
 `offscreen` (render into an exactly sized software surface), so a
 phone-sized viewport can be captured for verification on another host.

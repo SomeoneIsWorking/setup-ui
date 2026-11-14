@@ -32,7 +32,9 @@
 #include <string>
 #include <vector>
 
+struct SDL_Renderer;
 struct SDL_Surface;
+union SDL_Event;
 
 namespace setup_ui {
 
@@ -75,6 +77,8 @@ struct Config {
   // selection says so ("Choose your game files"); the plural default suits a
   // named set.
   std::string browse_label = "Choose files";
+  // The button that asks again once something has been chosen.
+  std::string again_label = "Choose different files";
   // Shown when the validator accepts the set, just before the port starts.
   std::string accepted_message = "Files accepted.";
 };
@@ -183,6 +187,11 @@ struct ViewOptions {
   // verification (a phone viewport larger than the build host's display) and
   // for hosts that present elsewhere.
   bool offscreen = false;
+  // Draw with the consumer's renderer in the window it belongs to, for a port
+  // that already has one open. The view then creates and destroys neither,
+  // ignores the window fields above, and reads no events of its own: the
+  // consumer's event loop hands each one to View::handle_event.
+  SDL_Renderer *host_renderer = nullptr;
 };
 
 // The setup screen: an SDL3 window rendering a Session through RmlUi.
@@ -203,6 +212,10 @@ public:
   std::vector<Request> poll();
   // Renders one frame and processes input. Cheap enough to call every frame.
   void frame();
+  // One event of the consumer's own loop, for a view on a host renderer. A
+  // gamepad's south button or Start asks what Return does, its east button
+  // dismisses the screen.
+  void handle_event(const SDL_Event &event);
 
   // Ends the loop after the consumer finished starting from an accepted set.
   void finish();
